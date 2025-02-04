@@ -1,0 +1,218 @@
+---
+title: "Gingival Palatal Epithelium ATAC"
+author: "Huan"
+date: "2023-05-06"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  tidy = TRUE,
+  tidy.opts = list(width.cutoff = 120),
+  message = FALSE,
+  warning = FALSE,
+  cache = TRUE
+)
+```
+
+
+
+# 1 Environment setup
+```{r}
+gc()
+library("DiffBind")
+library("ggplot2")
+library("pheatmap")
+library("dplyr")
+set.seed(12)
+theme_set(theme_bw())
+```
+
+
+# 2 Load data and sample list
+```{r,load data and sample list}
+atac <- read.csv("Gingiva_palate_ATAC_samplelist.csv")
+names(atac)
+atac <- dba(sampleSheet="Gingiva_palate_ATAC_samplelist.csv")
+atac
+plot(atac)
+```
+
+# 3 Count reads
+```{r}
+atac_all <- dba.count(atac, summit=250)
+atac_all #examine the new DBA object
+
+```
+
+Here we want to check the reads that overlap a consensus peak
+```{r}
+
+info <- dba.show(atac_all)
+libsizes <- cbind(LibReads=info$Reads, FRiP=info$FRiP, PeakReads=round(info$Reads * info$FRiP))
+rownames(libsizes) <- info$ID
+libsizes
+```
+
+
+Raw plot for centered counts
+```{r}
+plot(atac_all)
+```
+
+# 4 Normalization
+```{r}
+## here we consider the default normalization for our example, obtained using the dba.normalize function:
+atac_norm <- dba.normalize(atac_all) #By default, the data are normalized based on sequencing depth.
+## Here we check the normalizing factors:
+norm <- dba.normalize(atac_norm, bRetrieve=TRUE)
+norm
+```
+
+```{r}
+## The default library-size based methods results in all the library sizes being normalized to be the same (the mean library size):
+normlibs <- cbind(FullLibSize=norm$lib.sizes, NormFacs=norm$norm.factors, NormLibSize=round(norm$lib.sizes/norm$norm.factors))
+rownames(normlibs) <- info$ID
+normlibs
+```
+
+Raw plot for centered and normalized counts
+```{r}
+plot(atac_norm)
+```
+
+
+# 5 Differential analysis
+## 5.1 Setup contrast 
+```{r}
+atac_con <- dba.contrast (atac_norm,  categories=DBA_TISSUE, minMembers = 2)
+atac_con
+dba.show(atac_con, bContrasts=TRUE)
+```
+
+## 5.2 Differential analysis
+```{r}
+atac_diff <- dba.analyze(atac_con) 
+
+dba.show(atac_diff, bContrasts=TRUE)
+atac_diff
+```
+
+Heatmap for the correlation
+```{r}
+plot(atac_diff, contrast=1)
+```
+
+## 5.3 Plot of differential bindings
+```{r, fig.width=10, fig.height=5}
+dba.plotPCA(atac_diff, label=DBA_TISSUE)
+```
+
+```{r, fig.width=10, fig.height=8}
+for (i in 1:length(atac_diff[["contrasts"]]) ){
+  dba.plotMA(atac_diff, contrast=i, bNormalized=FALSE)
+}
+
+```
+
+```{r,fig.height=6, fig.width=4}
+for (j in 1:length(atac_diff[["contrasts"]]) ){
+  dba.plotHeatmap(atac_diff,contrast = j, correlations = FALSE)
+}
+
+
+```
+
+## 5.3 Save DBA object for further use
+```{r}
+saveRDS(atac_diff, file = "Gingiva_Palate_epi_NFR_Deseq2_240505.rds")
+```
+
+
+#6 Export Diff Peak
+```{r}
+diffPeaks <- dba.report(atac_diff,th = 1) %>%
+  data.frame() %>%
+  mutate(type = case_when(Fold >= 1 & FDR < 0.05 ~ "sigUp",
+                          Fold <= -1 & FDR < 0.05 ~ "sigDown",
+                          .default = "nonSig"))
+```
+
+
+check 
+```{r}
+table(diffPeaks$type)
+```
+
+Export all diff
+```{r}
+write.csv(diffPeaks, file = "./Deseq2/Gingiva_Palate_epi_NFR_Deseq2_diffAll_240505.csv",row.names = F)
+```
+
+# 7 Annotate diff peaks
+## 7.1 Load packages
+
+```{r}
+library(ChIPseeker)
+library(TxDb.Mmusculus.UCSC.mm10.knownGene)
+library(org.Mm.eg.db)
+```
+
+## 7.2 Annotation for Palate enriched NFR (sigUp)
+```{r}
+sigdiff <- diffPeaks %>% dplyr::filter(type == "sigUp") %>%
+  GRanges()
+
+peakAnno <- annotatePeak(sigdiff, tssRegion = c(-3000, 3000),
+                         TxDb = TxDb.Mmusculus.UCSC.mm10.knownGene)
+
+peakAnno_df <- data.frame(peakAnno)
+
+# id transformation
+ids <- mapIds(org.Mm.eg.db, keys = peakAnno_df$geneId, keytype = "ENTREZID", column = "SYMBOL")
+peakAnno_df$GeneName <- ids
+
+# output
+write.csv(peakAnno_df, 'Deseq2/diffbind_palate_sigPeak_anno.csv', row.names = FALSE)
+
+# plot
+plotAnnoBar(peakAnno)
+ggsave(filename = "./Deseq2/diffbind_palate_sigPeak_anno.pdf")
+```
+## 7.2 Annotation for Junctional enriched NFR (sigDown)
+```{r}
+sigdiff <- diffPeaks %>% dplyr::filter(type == "sigDown") %>%
+  GRanges()
+
+peakAnno <- annotatePeak(sigdiff, tssRegion = c(-3000, 3000),
+                         TxDb = TxDb.Mmusculus.UCSC.mm10.knownGene)
+
+peakAnno_df <- data.frame(peakAnno)
+
+# id transformation
+ids <- mapIds(org.Mm.eg.db, keys = peakAnno_df$geneId, keytype = "ENTREZID", column = "SYMBOL")
+peakAnno_df$GeneName <- ids
+
+# output
+write.csv(peakAnno_df, 'Deseq2/diffbind_Junctional_sigPeak_anno.csv', row.names = FALSE)
+
+# plot
+plotAnnoBar(peakAnno)
+ggsave(filename = "./Deseq2/diffbind_Junctional_sigPeak_anno.pdf")
+```
+# 8Export diffPeak
+```{r}
+diffPeaks <- read.csv("./Deseq2/Gingiva_Palate_epi_NFR_Deseq2_diffAll_240505.csv")
+
+types <- c("sigUp","sigDown","nonSig")
+
+# x = 2
+lapply(seq_along(types),function(x){
+  tmp <- diffPeaks %>% dplyr::filter(type == types[x]) %>%
+    dplyr::select(seqnames,start,end)
+
+  write.table(tmp,file = paste0("./Deseq2/",types[x],".bed"),
+              quote = F,col.names = F,row.names = F,sep = "\t")
+})
+```
+
