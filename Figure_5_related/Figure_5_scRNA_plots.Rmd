@@ -1,0 +1,1332 @@
+---
+title: "Figure5_plot"
+author: "Huan Liu"
+date: "2024-06-12"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  tidy = TRUE,
+  eval = FALSE,
+  tidy.opts = list(width.cutoff = 120),
+  message = TRUE,
+  warning = FALSE,
+  cache = TRUE,
+  label.duplicate = "append"
+)
+
+```
+
+# 1 Load packages and datasets
+
+```{r,load of packages and setup of the environment 1}
+gc()
+rm(list=ls())
+library(Seurat)
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(slingshot)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(cowplot)
+library(gridExtra)
+library(viridis)
+library(readr)
+library(Hmisc)
+library(ggpubr)
+library(rsample)
+library(tidymodels)
+library(scales)
+library(tradeSeq)
+library(pheatmap)
+library(scCustomize)
+library(destiny)
+library(plot3D)
+library(rgl)
+
+source("./PseudotimeAnalysis.r")
+
+set.seed(12)
+theme_set(theme_bw())
+
+load(file = "./Figure5_scRNA_part/Figure5_scRNA_part.Rdata")
+
+#load(file = "./SeuratObject/JE_combined_epi_harmony_SCT_renamed_renamed_sce.Rdata")
+#seu <- readRDS(file = "./SeuratObject/JE_combined_epi_harmony_MAGIC_renamed.rds")
+#seu_D0 <- readRDS(file = "./SeuratObject/JE_combined_epi_harmony_MAGIC_renamed_D0.rds")
+```
+
+
+
+# Figure 4E Diffusion map
+From our previous notebook using scVelo, we identified GE1 as the start, with GE3, GE4 and GE7 as end points.
+
+```{r, generate slingshot object}
+DefaultAssay(seu) <- c("SCT")
+sce  <- slingshot(seu.sc, clusterLabels = seu.sc$ident, reducedDim = 'UMAP',
+                  start.clus = c("GE1"), 
+                  end.clus = c("GE3", "GE4", "GE7"),
+                  approx_points = 150)               
+```
+You may use our previous color apporoach using `cb_palette`.
+
+```{r, check slingshot object}
+SlingshotDataSet(sce)
+plot(reducedDims(sce)$UMAP,  col =cb_palette[sce$celltype], pch=16, asp = 1, cex=0.2, label = T)                       
+lines(SlingshotDataSet(sce), lwd=2, type = 'lineage', col='black')
+```
+
+## 1.2 Probing with Diffusion map
+In order to probe for the best routes of trajectories, we employed diffusion map.
+
+```{r, set basic parameters for diffusion map}
+library(destiny)
+
+curve(find_dm_k(n), 0, 5624, xname = 'n')
+my_color<-cb_palette
+names(my_color) <- levels(seu)
+set.seed(123)
+find_sigmas(sce@int_colData@listData[["reducedDims"]]@listData[["HARMONY"]])
+```
+
+```{r, modify function for probeing and ploting}
+
+run_diffMap <- function(data=data, condition=condition,sigma="local", k = 20)
+  {
+  destinyObj <- as.ExpressionSet(as.data.frame(t(data))) 
+  destinyObj$condition <- factor(condition) 
+  dm <- DiffusionMap(destinyObj, sigma, k) 
+  return(dm)
+
+}
+
+plot_eigenVal <- function(dm=dm){ 
+  linepad <- .5 
+  plot( 
+    eigenvalues(dm), 
+    ylim = 0:1,
+    pch = 20,
+    xlab ='Diffusion component (DC)', 
+    ylab ='Eigenvalue'
+  )
+}
+
+plot_dm_3D <- function(dm=dm, dc=c(1:3), condition=condition, colours=colours, size=0.5, legend = NULL){
+  cond <- factor(condition) 
+  col <- factor(condition) 
+  levels(col) <- colours 
+  col <- as.vector(col) 
+  DCs <- paste("DC",dc, sep="")
+  data <- data.frame(
+    dm@eigenvectors[,DCs[1]], 
+    dm@eigenvectors[,DCs[2]], 
+    dm@eigenvectors[,DCs[3]] 
+    ) 
+  colnames(data) <- DCs
+  plot3d( 
+    data, 
+    bg=col, 
+    col=col, 
+    size=size, 
+    box = FALSE 
+    )
+  if (is.null(legend)==FALSE){ 
+    legend3d("topright", legend = unique(condition), pch = 21, pt.bg = unique(col), cex=1.5, inset=c(0.02), bty = "n") 
+     }
+}
+
+plot_dm_3D_in_2D <- function(dm=dm, dc=c(1:3), condition=condition, colours=colours, outline.color = "grey20", size=1, pch = 21, theta = 40, phi = 40, bty ="b"){
+  cond <- factor(condition) 
+  cols <- factor(condition) 
+  levels(cols) <- colours 
+  cols <- as.vector(cols) 
+  DCs <- paste("DC",dc, sep="")
+  data <- data.frame( 
+    dm@eigenvectors[,DCs[1]], 
+    dm@eigenvectors[,DCs[2]], 
+    dm@eigenvectors[,DCs[3]]
+    )
+  colnames(data) <- DCs
+  if(pch == 21){
+    scatter3D(x=as.matrix(data[,DCs[1]]),
+              y=as.matrix(data[,DCs[2]]), 
+              z=as.matrix(data[,DCs[3]]),
+              bg = cols,
+              col = outline.color, 
+              pch=pch,
+              cex = size,
+              xlab = DCs[1],
+              ylab = DCs[2],
+              zlab = DCs[3],
+              theta =theta, phi = phi, bty = bty)
+    } else {
+      scatter3D(x=as.matrix(data[,DCs[1]]),
+                y=as.matrix(data[,DCs[2]]), 
+                z=as.matrix(data[,DCs[3]]),
+                colvar =as.numeric(factor(condition)), col = colours,
+                pch=pch, cex = size,
+                xlab = DCs[1],
+                ylab = DCs[2],
+                zlab = DCs[3],
+                theta =theta,
+                phi = phi,
+                bty = bty)
+    }
+}
+
+
+plot_dm_3D_in_2D_2 <- function(dm, dc=c(1:3), condition, colours, outline.color = "grey20", size=1, pch = 21, theta = 40, phi = 40, bty ="b", alpha=1){
+  
+  cond <- factor(condition) 
+  cols <- factor(condition) 
+  levels(cols) <- colours 
+  cols <- as.vector(cols) 
+  
+  # Adjust colors for transparency
+  cols <- grDevices::adjustcolor(cols, alpha=alpha)
+  outline.color <- grDevices::adjustcolor(outline.color, alpha=alpha)
+  colours <- grDevices::adjustcolor(colours, alpha=alpha)
+  
+  DCs <- paste("DC",dc, sep="")
+  data <- data.frame( 
+    dm@eigenvectors[,DCs[1]], 
+    dm@eigenvectors[,DCs[2]], 
+    dm@eigenvectors[,DCs[3]]
+  )
+  colnames(data) <- DCs
+  
+  if(pch == 21){
+    scatter3D(x=as.matrix(data[,DCs[1]]),
+              y=as.matrix(data[,DCs[2]]), 
+              z=as.matrix(data[,DCs[3]]),
+              bg = cols,
+              col = outline.color, 
+              pch=pch,
+              cex = size,
+              xlab = DCs[1],
+              ylab = DCs[2],
+              zlab = DCs[3],
+              theta = theta, phi = phi, bty = bty)
+  } else {
+    scatter3D(x=as.matrix(data[,DCs[1]]),
+              y=as.matrix(data[,DCs[2]]), 
+              z=as.matrix(data[,DCs[3]]),
+              colvar = as.numeric(factor(condition)), col = colours,
+              pch=pch, cex = size,
+              xlab = DCs[1],
+              ylab = DCs[2],
+              zlab = DCs[3],
+              theta = theta,
+              phi = phi,
+              bty = bty)
+  }
+}
+
+
+
+get_pseudotime <- function(pseudotime, wthres=wthres){
+    pseudoT <- list()
+    for(lineage in 1:length(pseudotime@metadata[["curves"]]))local({
+        curve <- pseudotime@metadata[["curves"]][[lineage]]
+        lambda <- curve$lambda
+        weight <- curve$w
+        ps <- curve$lambda
+        ps[weight < wthres] <- NA
+        ps <- rankKeepNA(ps)
+        pseudoT[[lineage]] <<- ps
+    })
+    df <- t(do.call("rbind",pseudoT))
+    colnames(df) <- names(pseudotime@metadata[["curves"]])
+    return(df)
+}
+
+```
+
+
+```{r, gernate diffusion map}
+sce_dm <- run_diffMap(t(seu@reductions$harmony@cell.embeddings), colData(sce)$ident, sigma = 29.8, k = 1000) 
+plot_eigenVal(dm = sce_dm)
+```
+
+```{r, regernate slingshot using different eigenvectors}
+sce_lineage <- slingshot(sce_dm@eigenvectors[,c(1:4)], clusterLabels =factor(colData(sce)$ident), 
+                         start.clus = 'GE1',
+                         end.clus = c("GE3", "GE4", "GE7"),
+                         allow.breaks=FALSE, maxit = 1000, shrink.method ="density", thresh = 0.001, extend = "n")
+```
+
+```{r, check slingshot objects generated using diffusion map}
+SlingshotDataSet(sce_lineage)
+```
+
+
+```{r, check diffusion map in different dimension, fig.height=20, fig.width=20}
+splom(~sce_dm@eigenvectors[, 1:5], groups =sce$ident, col = my_color, main ="sce_lineage",key = list(space="right", 
+                                                                                                      points = list(pch = 19, col =my_color), 
+                                                                                                      text = list(c(levels(sce$ident)))))
+
+ggsave(filename = "Figure5_scRNA_part/splom_dm_sce_dm.png")
+```
+Since the end points are GE3, GE4 and GE7, we chose dc1, dc2 and dc3
+```{r,plot 3d version of dm}
+plot_dm_3D(dm = sce_dm, dc = c(1,2,3), condition = seu@active.ident, colour = my_color, size = 3) 
+rglwidget()
+rgl.snapshot('./Figure5_scRNA_part/Figure5E_3dplot.png', fmt = "png") # this is not working. Thus, after adjusting the angles, I save the rgl plot into PNG, and modifed in Adobe illustrator.
+```
+
+# Figure5E heatmap
+```{r, load imputed tradeseq results}
+load(file = "./SeuratObject/JE_combined_epi_harmony_SCT_renamed_slingshot_tradeSeq.Rdata")
+```
+
+```{r}
+crv <- SlingshotDataSet(sce)
+countMatrix <- sce@assays@data@listData[["counts"]]
+counts <- as.matrix(countMatrix)
+rm(countMatrix)
+```
+## calculate early driver
+```{r, filter low coverage data}
+# Assuming your data is in tradeSeq_data
+tradeSeq_data <- rowData(sce.trade)$tradeSeq
+
+# 1. Drop the 'Sigma' column
+tradeSeq_data <- tradeSeq_data %>% dplyr::select(-Sigma)
+
+# 2. Compute the number of non-missing values per row
+num_non_missing <- rowSums(!is.na(tradeSeq_data))
+
+# 3. Identify the rows with the fewest non-missing values
+min_non_missing <- min(num_non_missing)
+rows_with_fewest_non_missing <- which(num_non_missing == min_non_missing)
+
+# Show the rows with the fewest non-missing values
+tradeSeq_data[rows_with_fewest_non_missing, ]
+
+```
+
+
+Again, we performed the patternTest using the sce.trade object with
+abnormal rows excluded.
+
+```{r}
+earlyDERes <- earlyDETest(sce.trade[-rows_with_fewest_non_missing,], pairwise = TRUE)
+```
+
+
+
+```{r,check the headers}
+earlyDERes[1:3, ]
+```
+
+We want to see which genes
+
+```{r, check top genes}
+oPat <- order(earlyDERes$waldStat, 
+              decreasing = TRUE)
+head(rownames(earlyDERes)[oPat])
+```
+
+List the top 10 genes:
+
+```{r,list top 10 genes}
+rownames(earlyDERes)[oPat][1:10]
+top10_earlyDERes <- rownames(earlyDERes)[oPat][1:10]
+write.csv(top10_earlyDERes, file = "./Figure5_scRNA_part/JE_combined_epi_harmony_SCT_renamed_slingshot_top_10_EarlyDriver_genes_with_different_pattern_among_all_lineages_20220822.csv", row.names = FALSE )
+
+```
+
+We then plot the top10 early driver genes among the four lineages
+
+```{r,top10 early driver genes among the four lineages}
+curvesCols <- c("#619CFF", "#00B9E3","#00BA38","#93AA00")
+
+
+    for (gene in top10_earlyDERes) {
+        plot_obj <- plotSmoothers(sce.trade, counts, gene, curvesCols = curvesCols, border = FALSE) +
+                    scale_color_manual(values = curvesCols)
+        
+        # Define filename
+        filename <- paste(output_dir, "Plot_top10_different_early_driver_among_all_lineages", "_", gene, ".png", sep = "")
+        
+        # Save plot to file
+        ggsave(filename, plot = plot_obj, width = 10, height = 5)
+    }
+```
+
+Below, we first write a function to get the top10 genes for a given
+comparison, then we implemented it for each pairwise comparison Here we
+will pick the top 10 early driver genes differentially activated between
+two lineages
+
+```{r, function to get top10 genes in 1vs1 comparision}
+# Function to get top 10 genes for a given comparison
+getTopEDGenes <- function(column_name) {
+    o <- order(earlyDERes[[column_name]], decreasing = TRUE)
+    return(names(sce.trade)[o[1:10]])
+}
+
+# Apply the function for each pairwise comparison
+topEDGenes_1vs2 <- getTopEDGenes("waldStat_1vs2")
+topEDGenes_1vs3 <- getTopEDGenes("waldStat_1vs3")
+topEDGenes_1vs4 <- getTopEDGenes("waldStat_1vs4")
+topEDGenes_2vs3 <- getTopEDGenes("waldStat_2vs3")
+topEDGenes_2vs4 <- getTopEDGenes("waldStat_2vs4")
+topEDGenes_3vs4 <- getTopEDGenes("waldStat_3vs4")
+
+# Build the resulting dataframe
+topEDGenes_1v1 <- data.frame(
+    Lineage_1_vs_2 = topEDGenes_1vs2,
+    Lineage_1_vs_3 = topEDGenes_1vs3,
+    Lineage_1_vs_4 = topEDGenes_1vs4,
+    Lineage_2_vs_3 = topEDGenes_2vs3,
+    Lineage_2_vs_4 = topEDGenes_2vs4,
+    Lineage_3_vs_4 = topEDGenes_3vs4
+)
+
+```
+
+```{r,check headers}
+head(topEDGenes_1v1)
+```
+
+```{r,list top10 genes}
+write.csv(topEDGenes_1v1, file = "./Figure5_scRNA_part/JE_combined_epi_harmony_SCT_renamed_slingshot_top_10_early_driver_genes_between_two_lineages_20220822.csv", row.names = FALSE )
+```
+
+I also want to get the unique genes in each comparison
+
+```{r,unique top genes}
+unique_genes <- lapply(1:ncol(topEDGenes_1v1), function(col_idx) {
+  current_genes <- topEDGenes_1v1[[col_idx]]
+  other_genes <- unlist(topEDGenes_1v1[,-col_idx])
+  unique_genes <- current_genes[!(current_genes %in% other_genes)]
+  return(unique_genes)
+})
+
+names(unique_genes) <- colnames(topEDGenes_1v1)
+
+# Find the maximum number of unique genes for all comparisons
+max_length <- max(sapply(unique_genes, length))
+
+# Function to fill a vector with NAs up to max_length
+fill_NA <- function(vec) {
+  c(vec, rep(NA, max_length - length(vec)))
+}
+
+# Apply the fill_NA function to each vector in unique_genes
+filled_genes <- lapply(unique_genes, fill_NA)
+
+# Convert the list to a dataframe
+unique_genes_df <- as.data.frame(filled_genes)
+
+unique_genes_df
+```
+
+
+
+Also,I'll loop through the columns of the topEDGenes_1v1 dataframe and
+adjust the curvesCols according to the comparison. For this, we'll
+create a helper function to determine the appropriate color codes for
+each pairwise comparison: We will save the outputs in png formats.
+
+```{r, DE early driver unique genes}
+
+library(ggplot2)
+
+# Function to determine color codes for a given pairwise comparison
+getCurvesCols <- function(comparison) {
+    allCols <- c("#93AA00", "#00BA38", "#00B9E3", "#619CFF")
+    transp1 <- "transparent"
+    transp2 <- "transparent"
+    
+    if (comparison == "Lineage_1_vs_2") return(c(allCols[4], allCols[3], transp1, transp2))
+    if (comparison == "Lineage_1_vs_3") return(c(allCols[4], transp1, allCols[2], transp2))
+    if (comparison == "Lineage_1_vs_4") return(c(allCols[4], transp1, transp2, allCols[1]))
+    if (comparison == "Lineage_2_vs_3") return(c(transp1, allCols[3], allCols[2], transp2))
+    if (comparison == "Lineage_2_vs_4") return(c(transp1, allCols[3], transp2, allCols[1]))
+    if (comparison == "Lineage_3_vs_4") return(c(transp1, transp2, allCols[2], allCols[1]))
+}
+
+# Output directory
+output_dir <- "./Figure5_scRNA_part/"
+
+# Check if the output directory exists, if not, create it
+if (!dir.exists(output_dir)) {
+    dir.create(output_dir)
+}
+# Loop through the columns of unique_genes_df and plot each gene
+for (comparison in colnames(unique_genes_df)) {
+    curvesCols <- getCurvesCols(comparison)
+    for (gene in unique_genes_df[[comparison]]) {
+        
+        # Omit NA genes
+        if (is.na(gene)) next
+        
+        plot_obj <- plotSmoothers(sce.trade, counts, gene, curvesCols = curvesCols, border = FALSE) +
+                    scale_color_manual(values = curvesCols)
+        
+        # Define filename
+        filename <- paste(output_dir, "Plot_unique_early_driver_gene_", comparison, "_", gene, ".png", sep = "")
+        
+        # Save plot to file
+        ggsave(filename, plot = plot_obj, width = 10, height = 5)
+    }
+}
+
+
+```
+
+```{r,DE early driver genes}
+
+library(ggplot2)
+
+# Function to determine color codes for a given pairwise comparison
+getCurvesCols <- function(comparison) {
+    allCols <- c("#93AA00", "#00BA38", "#00B9E3", "#619CFF")
+    transp1 <- "transparent"
+    transp2 <- "transparent"
+    
+    if (comparison == "Lineage_1_vs_2") return(c(allCols[4], allCols[3], transp1, transp2))
+    if (comparison == "Lineage_1_vs_3") return(c(allCols[4], transp1, allCols[2], transp2))
+    if (comparison == "Lineage_1_vs_4") return(c(allCols[4], transp1, transp2, allCols[1]))
+    if (comparison == "Lineage_2_vs_3") return(c(transp1, allCols[3], allCols[2], transp2))
+    if (comparison == "Lineage_2_vs_4") return(c(transp1, allCols[3], transp2, allCols[1]))
+    if (comparison == "Lineage_3_vs_4") return(c(transp1, transp2, allCols[2], allCols[1]))
+}
+
+# Output directory
+output_dir <- "./Figure5_scRNA_part/"
+
+# Check if the output directory exists, if not, create it
+if (!dir.exists(output_dir)) {
+    dir.create(output_dir)
+}
+
+# Loop through the columns of topEDGenes_1v1 and plot each gene
+for (comparison in colnames(topEDGenes_1v1)) {
+    curvesCols <- getCurvesCols(comparison)
+    for (gene in topEDGenes_1v1[[comparison]]) {
+        plot_obj <- plotSmoothers(sce.trade, counts, gene, curvesCols = curvesCols, border = FALSE) +
+                    scale_color_manual(values = curvesCols)
+        
+        # Define filename
+        filename <- paste(output_dir, "Plot_top10_early_driver_gene_", comparison, "_", gene, ".png", sep = "")
+        
+        # Save plot to file
+        ggsave(filename, plot = plot_obj, width = 10, height = 5)
+    }
+}
+
+```
+##  Bifurcation heatmap for early driver genes among lineage 1 and 3.
+
+However, we want to know if there are any trends cluster along the
+bifurcation.Using hybrid heatmap function, we are trying to see if
+slingshot+tradeseq could replace BEAM in monocle2. For instance, we want
+to check the trends of the top 200 genes in 100 pseudotime intervals.
+Immediately after the last part, the oEarly indicate the early driver
+genes differentially activated in lineage 1 or lineage 3. Here we want
+to compare Lineage 1 vs Lineage 3. And we will repeat some of the
+command lines in the last part.
+
+```{r, get oEarly}
+oEarly <- order(earlyDERes$waldStat_1vs3, decreasing = TRUE) # get the most differentially activated genes between lineage 1 and lineage 3
+head(rownames(earlyDERes)[oEarly])
+```
+
+```{r,list top 100 early drivers}
+rownames(earlyDERes)[oEarly][1:100] # list the top 100 early driver genes differentially activated between lineage 1 and lineage 3
+```
+
+```{r,smooth the model}
+yhatSmooth_false <- predictSmooth(sce.trade, gene = rownames(earlyDERes)[oEarly][1:200], #top 200 genes
+                                  nPoints = 100, #idealy, I would use 30-100, larger number will make the scale effect not that significant
+                                  tidy = FALSE)
+
+```
+
+Since we know that the matrix counts were arranged along the pseudotime,
+and we generate the oEarly by the Waldtest between lineage 1 and 3, we
+subset and re-arrange the count matrix to generate heatmap using the
+hybrid line below:
+
+```{r,fig.height=30, fig.width=20}
+heatSmooth <- pheatmap(t(scale(t(yhatSmooth_false[, c(100:1,201:300)]))), # yhatSmooth_false we used nPoints=100, so we choose 1:100 and 201:300 for lineage 1 and 3 respectively
+                       cluster_cols = FALSE,
+                       show_rownames = TRUE, 
+                       show_colnames = TRUE,
+                       border_color = FALSE)
+ggsave("./Figure5_scRNA_part/JE_combined_epi_harmony_SCT_renamed_slingshot_tradeSeq_lineage_1_vs3_bifurcation_heatmap.pdf", plot=heatSmooth, width = 10, height = 25)
+```
+
+
+```{r,fig.height=30, fig.width=20}
+library(ggsci)
+
+# Assuming yhatSmooth_false is your data matrix
+data_matrix <- t(scale(t(yhatSmooth_false[, c(100:1,201:300)])))
+
+# Perform clustering (if not already done)
+# Here, I'm assuming hierarchical clustering with cutree for 6 clusters
+hc <- hclust(dist(data_matrix))
+clusters <- cutree(hc, k = 6)
+
+# Create color annotation
+cluster_colors <- setNames(pal_npg("nrc")(6), unique(clusters))
+
+row_annotation <- data.frame(Cluster = factor(clusters, labels = names(cluster_colors)))
+row_annotation_colors <- list(Cluster = cluster_colors)
+
+# Generate pheatmap with row annotation
+heatSmooth <- pheatmap(data_matrix, 
+                       cluster_cols = FALSE,
+                       show_rownames = TRUE, 
+                       show_colnames = FALSE,
+                       border_color = FALSE,
+                       annotation_row = row_annotation,
+                       annotation_colors = row_annotation_colors)
+
+# Save the plot
+ggsave("./Figure5_scRNA_part/JE_combined_epi_harmony_SCT_renamed_slingshot_tradeSeq_lineage_1_vs3_bifurcation_heatmap_p_test.pdf", plot=heatSmooth, width = 10, height = 25)
+
+```
+Export the cut tree results (k=6)
+```{r, export cuttree}
+row_cluster <- cutree(heatSmooth$tree_row, k = 6)
+## order the matrix
+newOrder <- yhatSmooth_false[, c(100:1,201:300)][heatSmooth$tree_row$order,]
+newOrder <- as.data.frame(newOrder)
+newOrder[,ncol(newOrder)+1] = row_cluster[match(rownames(newOrder),names(row_cluster))]
+colnames(newOrder)[ncol(newOrder)] = "Cluster"
+
+## export the results
+write.table(newOrder, "./Figure5_scRNA_part/JE_combined_epi_SCT_renamed_slingshot_tradeseq_1vs3_DEarly_bifurcation.csv", quote=F, row.names =T, col.names =T, sep ='\t')
+```
+
+
+```{r,check dim of newOrder}
+dim(newOrder)
+```
+## Smooth plot for all the genes in each cluster
+```{r}
+library(tibble)
+
+newOrder <- newOrder %>% rownames_to_column(var ="Gene")
+# Filtering and Selecting the Data
+
+filtered_data <- newOrder %>% 
+  filter(Cluster == 1) %>% 
+  select(Gene,starts_with("lineage1"), Cluster)
+
+# Reshape the data for plotting
+data_long <- filtered_data %>% 
+  select(-Cluster) %>% 
+  gather(key = "Time_Point", value = "Expression_Level", -Gene)
+
+# View the reshaped data
+head(data_long)
+```
+```{r}
+# Remove the "lineage1_" prefix and convert to numeric
+data_long$Time_Point <- as.numeric(str_replace(data_long$Time_Point, "lineage1_", ""))
+
+# Calculate the average expression level at each time point
+average_expression <- data_long %>% 
+  group_by(Time_Point) %>% 
+  summarise(Average_Expression = mean(Expression_Level))
+
+# Create the plot
+ggplot(average_expression, aes(x = Time_Point, y = Average_Expression)) +
+  #geom_line() +
+  geom_smooth(se = TRUE, method = "loess") +
+  theme_minimal() +
+  labs(title = "Average Expression Level of Genes in Cluster 1 Over Time (Lineage 1)", 
+       x = "Time Point", 
+       y = "Average Expression Level")
+
+```
+
+```{r}
+# Convert rownames (gene names) to a column
+#newOrder <- newOrder %>% rownames_to_column(var = "Gene")
+
+# Create a color palette
+cluster_colors <- pal_npg("nrc")(6)
+# Initialize variables for y-axis limits
+y_limits <- list()
+# Define ylim for each cluster across two lineages
+y_limits[[1]] <- c(0,56)
+y_limits[[2]] <- c(0,10)
+y_limits[[3]] <- c(0,10)
+y_limits[[4]] <- c(0,45)
+y_limits[[5]] <- c(0,40)
+y_limits[[6]] <- c(0,55)
+
+# Loop for each cluster and lineage
+for(cluster in 1:6) {
+  for(lineage in c("lineage1", "lineage3")) {
+    # Filtering for the current cluster and selecting the current lineage columns
+    filtered_data <- newOrder %>% 
+      filter(Cluster == cluster) %>% 
+      select(Gene, starts_with(lineage))
+
+    # Reshape the data for plotting
+    data_long <- filtered_data %>% 
+      gather(key = "Time_Point", value = "Expression_Level", -Gene)
+
+    # Remove the lineage prefix and convert to numeric
+    prefix <- paste0(lineage, "_")
+    data_long$Time_Point <- as.numeric(str_replace(data_long$Time_Point, prefix, ""))
+
+    # Sort Time_Point in the required order
+    if (lineage == "Lineage1") {
+      data_long <- data_long %>% arrange(desc(Time_Point))
+    } else {
+      data_long <- data_long %>% arrange(Time_Point)
+    }
+
+    # Calculate the average expression level at each time point
+    average_expression <- data_long %>% 
+      group_by(Time_Point) %>% 
+      summarise(Average_Expression = mean(Expression_Level))
+
+    # Get the y-axis limits for this cluster
+    ylims <- y_limits[[cluster]]
+
+    # Create the plot with cluster-specific y-axis limits
+    plot <- ggplot(average_expression, aes(x = Time_Point, y = Average_Expression)) +
+      geom_smooth(se = TRUE, method = "loess", color = cluster_colors[cluster], fill = cluster_colors[cluster], alpha = 0.4) +
+      theme_minimal() +
+      labs(title = paste("Average Expression Level of Genes in Cluster", cluster, "Over Time (", lineage, ")", sep = " "), 
+           x = "Time Point", 
+           y = "Average Expression Level") +
+      ylim(ylims[1], ylims[2])  # Apply cluster-specific y-axis limits
+
+    # Print the plot
+    print(plot)
+  }
+}
+```
+
+Merge the two lineages into one
+
+```{r,merge teh plots of two lineages into one}
+# Create a color palette
+cluster_colors <- pal_npg("nrc")(6)
+
+# Define ylim for each cluster across two lineages
+y_limits <- list(c(0, 56), c(0, 10), c(0, 10), c(0, 45), c(0, 40), c(0, 55))
+
+
+# Loop for each cluster
+for(cluster in 1:6) {
+    # Initialize an empty dataframe to store combined data
+    combined_data <- data.frame()
+
+    # Loop through each lineage and combine data
+    for(lineage in c("lineage1", "lineage3")) {
+        # Filtering and reshaping the data
+        filtered_data <- newOrder %>% 
+          filter(Cluster == cluster) %>% 
+          select(Gene, starts_with(lineage)) %>% 
+          gather(key = "Time_Point", value = "Expression_Level", -Gene)
+
+        # Remove the lineage prefix and convert to numeric
+        filtered_data$Time_Point <- as.numeric(str_replace(filtered_data$Time_Point, paste0(lineage, "_"), ""))
+
+        # Sort Time_Point in the required order
+        if (lineage == "lineage1") {
+            filtered_data <- filtered_data %>% arrange(desc(Time_Point))
+        } else {
+            filtered_data <- filtered_data %>% arrange(Time_Point)
+        }
+
+        # Add a column for lineage
+        filtered_data$Lineage <- lineage
+
+        # Combine with previous data
+        combined_data <- rbind(combined_data, filtered_data)
+    }
+
+    # Calculate the average expression level at each time point for each lineage
+    average_expression <- combined_data %>% 
+      group_by(Time_Point, Lineage) %>% 
+      summarise(Average_Expression = mean(Expression_Level))
+
+    # Get the y-axis limits for this cluster
+    ylims <- y_limits[[cluster]]
+
+    # Create the plot with cluster-specific y-axis limits
+    plot <- ggplot(average_expression, aes(x = Time_Point, y = Average_Expression, group = Lineage)) +
+      geom_smooth(aes(linetype = Lineage), se = TRUE, method = "loess", size = 1.2, color = cluster_colors[cluster], fill = alpha(cluster_colors[cluster], 0.4)) +
+      scale_linetype_manual(values = c("lineage1" = "solid", "lineage3" = "dashed")) +
+      theme_minimal() +
+      labs(title = paste("Combined Average Expression Level of Genes in Cluster", cluster, "Over Time"), 
+           x = "Time Point", 
+           y = "Average Expression Level") +
+      ylim(ylims[1], ylims[2]) +
+      theme_bw() +  # Use theme_bw
+      theme(
+      panel.grid.major = element_blank(),  # Turn off major grid lines
+      panel.grid.minor = element_blank(),  # Turn off minor grid lines
+      legend.position = "right"
+  )
+
+    # Print the plot
+    print(plot)
+    # Save the plot
+    file_name <- paste0("./Figure5_scRNA_part/JE_epi_harmony_imputation_slingshot_ED_bifurcation_lineage_1_vs_3_cluster", cluster, ".pdf")
+    ggsave(file_name, plot = plot, device = "pdf", width = 11, height = 8.5)
+
+}
+```
+# Figure 4F GO enrichment for different cluster
+
+```{r,load of packages and setup of the environment 1}
+gc()
+rm(list=ls())
+library(Seurat)
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(slingshot)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(cowplot)
+library(gridExtra)
+library(viridis)
+library(readr)
+library(Hmisc)
+library(ggpubr)
+library(rsample)
+library(tidymodels)
+library(scales)
+library(tradeSeq)
+library(pheatmap)
+library(scCustomize)
+library(destiny)
+library(plot3D)
+library(rgl)
+library(clusterProfiler)
+library(org.Mm.eg.db)
+
+source("./PseudotimeAnalysis.r")
+
+set.seed(12)
+theme_set(theme_bw())
+
+load(file = "./Figure5_scRNA_part/Figure5_scRNA_part.Rdata")
+module_gene <- read.csv("./Figure5_scRNA_part/JE_combined_epi_SCT_renamed_slingshot_tradeseq_1vs3_DEarly_bifurcation.csv",sep="\t")
+```
+
+
+```{r, extract genes in each cluster}
+###extract gene names in each cluster
+
+module_gene$gene <- rownames(module_gene)
+
+module_gene_list <- module_gene[,c(201,202)]
+```
+
+
+
+
+```{r,GO enrichment}
+library(clusterProfiler)
+library(org.Mm.eg.db)
+library(dplyr)
+
+Module_GO <- data.frame()
+
+for (i in unique(module_gene_list$Cluster)) {
+  
+  data <- filter(module_gene_list, module_gene_list$Cluster == i)
+  df <- bitr(data$gene, 
+             fromType = "SYMBOL",
+             toType = c("ENTREZID"), 
+             OrgDb = "org.Mm.eg.db")  # Convert SYMBOL to ENTREZID
+  
+  go <- enrichGO(gene = unique(df$ENTREZID),
+                 OrgDb = org.Mm.eg.db,
+                 keyType = 'ENTREZID',
+                 ont = "BP",
+                 pAdjustMethod = "BH",
+                 pvalueCutoff = 0.05,
+                 qvalueCutoff = 0.05,
+                 readable = TRUE)
+  go_res <- go@result
+  
+  if (dim(go_res)[1] != 0) {
+    go_res$cluster <- i
+    Module_GO <- rbind(Module_GO, go_res)
+  }
+}
+
+# Filter significant terms
+Module_GO <- Module_GO[which(Module_GO$qvalue <= 0.05),]
+#Module_GO <- Module_GO[, c("ID", "Description", "qvalue", "cluster", "geneID")]
+write.csv(Module_GO, file = './Figure5_scRNA_part/Module_GO.csv')
+
+```
+
+#Smooth plot for genes of interest
+##Trp63 smooth plot
+```{r}
+curvesCols <- c("#619CFF", "transparent","#00BA38","transparent")
+plotSmoothers(sce.trade, counts, "Trp63", curvesCols = curvesCols,size=1/10,
+              border = FALSE) +  xlim(0,15) +ylim(0,6)+
+  scale_color_manual(values = curvesCols)
+ggsave("./Figure5_scRNA_part/Plot_Trp63_lineage1vs3.pdf",  width = 15, height = 5)
+```
+##Runx1 smooth plot
+```{r}
+curvesCols <- c("#619CFF", "transparent","#00BA38","transparent")
+plotSmoothers(sce.trade, counts, "Runx1", curvesCols = curvesCols,size=1/10,
+              border = FALSE) +  xlim(0,15) +ylim(0,6)+
+  scale_color_manual(values = curvesCols)
+ggsave("./Figure5_scRNA_part/Plot_Runx1_lineage1vs3.pdf",  width = 15, height = 5)
+```
+
+
+
+# Figure 4G tri genes umap
+Prepare packages and datasets
+```{r,load packages}
+#ggplot作图
+library(ggplot2)
+library(scales)
+library(ggnewscale)
+```
+
+```{r, extract expression matrix}
+#提取表达数据（scaled）
+exp <- seu_D0@assays[["MAGIC_SCT"]]@data
+exp <- as.data.frame(exp)#行为基因，列是细胞
+#提取UMAP坐标
+position=seu@reductions$umap@cell.embeddings
+position <- as.data.frame(position)
+position$cell <- rownames(position)
+```
+
+## Trp63
+```{r, extract gene expression for genes of interest,fig.width=8,fig.height=7}
+# 构建作图数据
+gene <- c("Trp63", "Odam", "Lor") # Blue color for Odam, Green color for Lor
+
+data_gene <- position
+for (i in 1:length(gene)) {
+  gene_exp <- exp[gene[i],]
+  gene_exp <- t(gene_exp)
+  gene_exp <- as.data.frame(gene_exp)
+  gene_exp$cell <- rownames(gene_exp)
+  data_gene <- merge(data_gene, gene_exp, by='cell')
+}
+
+colnames(data_gene)
+rownames(data_gene) <- data_gene$cell
+data_gene <- data_gene[, -1]
+
+# 设定阈值
+threshold <- 0.5
+
+# 提取表达这些基因的细胞并筛选表达量大于阈值的点
+data_Trp63 <- data_gene[, c(1:3)]
+data_Trp63 <- data_Trp63[which(data_Trp63$Trp63 > threshold),]
+
+data_Odam <- data_gene[, c(1, 2, 4)]
+data_Odam <- data_Odam[which(data_Odam$Odam > threshold),]
+
+data_Lor <- data_gene[, c(1, 2, 5)]
+data_Lor <- data_Lor[which(data_Lor$Lor > threshold),]
+
+# 设置绘图参数
+point_size <- 1.0
+point_alpha <- 0.6
+
+ggplot() +
+  new_scale("color") +
+  geom_point(data = data_Trp63, aes(x = UMAP_1, y = UMAP_2, colour = Trp63), shape = 16, size = point_size, alpha = point_alpha) +
+  scale_colour_gradient(low = "lightgrey", high = "red") +
+  new_scale("color") +
+  geom_point(data = data_Odam, aes(x = UMAP_1, y = UMAP_2, colour = Odam), shape = 16, size = point_size, alpha = point_alpha) +
+  scale_colour_gradient(low = "lightgrey", high = "#619CFF") +
+  new_scale("color") +
+  geom_point(data = data_Lor, aes(x = UMAP_1, y = UMAP_2, colour = Lor), shape = 16, size = point_size, alpha = point_alpha) +
+  scale_colour_gradient(low = "lightgrey", high = "#00BA38") +
+  geom_point(data = data_gene, aes(x = UMAP_1, y = UMAP_2), size = 0.5, shape = 16, color = 'lightgrey', alpha = 0.1) +
+    theme_minimal() +
+  theme(
+    panel.grid = element_blank(),  # 移除网格线
+    panel.border = element_rect(color = "black", fill = NA, size = 1)  # 添加黑色边框
+  )
+ggsave("./Figure5_scRNA_part/JE_K5_epi_Trp63_umap.pdf")
+```
+## Klf4
+```{r, extract gene expression for genes of interest,fig.width=8,fig.height=7}
+# 构建作图数据
+gene <- c("Klf4", "Odam", "Lor") # Blue color for Odam, Green color for Lor
+
+data_gene <- position
+for (i in 1:length(gene)) {
+  gene_exp <- exp[gene[i],]
+  gene_exp <- t(gene_exp)
+  gene_exp <- as.data.frame(gene_exp)
+  gene_exp$cell <- rownames(gene_exp)
+  data_gene <- merge(data_gene, gene_exp, by='cell')
+}
+
+colnames(data_gene)
+rownames(data_gene) <- data_gene$cell
+data_gene <- data_gene[, -1]
+
+# 设定阈值
+threshold <- 0.5
+
+# 提取表达这些基因的细胞并筛选表达量大于阈值的点
+data_Trp63 <- data_gene[, c(1:3)]
+data_Trp63 <- data_Trp63[which(data_Trp63$Klf4 > threshold),]
+
+data_Odam <- data_gene[, c(1, 2, 4)]
+data_Odam <- data_Odam[which(data_Odam$Odam > threshold),]
+
+data_Lor <- data_gene[, c(1, 2, 5)]
+data_Lor <- data_Lor[which(data_Lor$Lor > threshold),]
+
+# 设置绘图参数
+point_size <- 1.0
+point_alpha <- 0.6
+
+ggplot() +
+  new_scale("color") +
+  geom_point(data = data_Trp63, aes(x = UMAP_1, y = UMAP_2, colour = Klf4), shape = 16, size = point_size, alpha = point_alpha) +
+  scale_colour_gradient(low = "lightgrey", high = "red") +
+  new_scale("color") +
+  geom_point(data = data_Odam, aes(x = UMAP_1, y = UMAP_2, colour = Odam), shape = 16, size = point_size, alpha = point_alpha) +
+  scale_colour_gradient(low = "lightgrey", high = "#619CFF") +
+  new_scale("color") +
+  geom_point(data = data_Lor, aes(x = UMAP_1, y = UMAP_2, colour = Lor), shape = 16, size = point_size, alpha = point_alpha) +
+  scale_colour_gradient(low = "lightgrey", high = "#00BA38") +
+  geom_point(data = data_gene, aes(x = UMAP_1, y = UMAP_2), size = 0.5, shape = 16, color = 'lightgrey', alpha = 0.1) +
+    theme_minimal() +
+  theme(
+    panel.grid = element_blank(),  # 移除网格线
+    panel.border = element_rect(color = "black", fill = NA, size = 1)  # 添加黑色边框
+  )
+ggsave("./Figure5_scRNA_part/JE_K5_epi_Klf4_umap.pdf")
+```
+## Itga3
+```{r, extract gene expression for genes of interest,fig.width=8,fig.height=7}
+# 构建作图数据
+gene <- c("Itga3", "Odam", "Lor") # Blue color for Odam, Green color for Lor
+
+data_gene <- position
+for (i in 1:length(gene)) {
+  gene_exp <- exp[gene[i],]
+  gene_exp <- t(gene_exp)
+  gene_exp <- as.data.frame(gene_exp)
+  gene_exp$cell <- rownames(gene_exp)
+  data_gene <- merge(data_gene, gene_exp, by='cell')
+}
+
+colnames(data_gene)
+rownames(data_gene) <- data_gene$cell
+data_gene <- data_gene[, -1]
+
+# 设定阈值
+threshold <- 0.5
+
+# 提取表达这些基因的细胞并筛选表达量大于阈值的点
+data_Trp63 <- data_gene[, c(1:3)]
+data_Trp63 <- data_Trp63[which(data_Trp63$Itga3 > 0),]
+
+data_Odam <- data_gene[, c(1, 2, 4)]
+data_Odam <- data_Odam[which(data_Odam$Odam > threshold),]
+
+data_Lor <- data_gene[, c(1, 2, 5)]
+data_Lor <- data_Lor[which(data_Lor$Lor > threshold),]
+
+# 设置绘图参数
+point_size <- 1.0
+point_alpha <- 0.6
+
+ggplot() +
+  new_scale("color") +
+  geom_point(data = data_Trp63, aes(x = UMAP_1, y = UMAP_2, colour = Itga3), shape = 16, size = point_size, alpha = point_alpha) +
+  scale_colour_gradient(low = "lightgrey", high = "red") +
+  new_scale("color") +
+  geom_point(data = data_Odam, aes(x = UMAP_1, y = UMAP_2, colour = Odam), shape = 16, size = point_size, alpha = point_alpha) +
+  scale_colour_gradient(low = "lightgrey", high = "#619CFF") +
+  new_scale("color") +
+  geom_point(data = data_Lor, aes(x = UMAP_1, y = UMAP_2, colour = Lor), shape = 16, size = point_size, alpha = point_alpha) +
+  scale_colour_gradient(low = "lightgrey", high = "#00BA38") +
+  geom_point(data = data_gene, aes(x = UMAP_1, y = UMAP_2), size = 0.5, shape = 16, color = 'lightgrey', alpha = 0.1) +
+    theme_minimal() +
+  theme(
+    panel.grid = element_blank(),  # 移除网格线
+    panel.border = element_rect(color = "black", fill = NA, size = 1)  # 添加黑色边框
+  )
+ggsave("./Figure5_scRNA_part/JE_K5_epi_Itga3_umap.pdf")
+```
+## Itgb1
+```{r, extract gene expression for genes of interest,fig.width=8,fig.height=7}
+# 构建作图数据
+gene <- c("Itgb1", "Odam", "Lor") # Blue color for Odam, Green color for Lor
+
+data_gene <- position
+for (i in 1:length(gene)) {
+  gene_exp <- exp[gene[i],]
+  gene_exp <- t(gene_exp)
+  gene_exp <- as.data.frame(gene_exp)
+  gene_exp$cell <- rownames(gene_exp)
+  data_gene <- merge(data_gene, gene_exp, by='cell')
+}
+
+colnames(data_gene)
+rownames(data_gene) <- data_gene$cell
+data_gene <- data_gene[, -1]
+
+# 设定阈值
+threshold <- 0.5
+
+# 提取表达这些基因的细胞并筛选表达量大于阈值的点
+data_Trp63 <- data_gene[, c(1:3)]
+data_Trp63 <- data_Trp63[which(data_Trp63$Itgb1 > 0.2),]
+
+data_Odam <- data_gene[, c(1, 2, 4)]
+data_Odam <- data_Odam[which(data_Odam$Odam > threshold),]
+
+data_Lor <- data_gene[, c(1, 2, 5)]
+data_Lor <- data_Lor[which(data_Lor$Lor > threshold),]
+
+# 设置绘图参数
+point_size <- 1.0
+point_alpha <- 0.6
+
+ggplot() +
+  new_scale("color") +
+  geom_point(data = data_Trp63, aes(x = UMAP_1, y = UMAP_2, colour = Itgb1), shape = 16, size = point_size, alpha = point_alpha) +
+  scale_colour_gradient(low = "lightgrey", high = "red") +
+  new_scale("color") +
+  geom_point(data = data_Odam, aes(x = UMAP_1, y = UMAP_2, colour = Odam), shape = 16, size = point_size, alpha = point_alpha) +
+  scale_colour_gradient(low = "lightgrey", high = "#619CFF") +
+  new_scale("color") +
+  geom_point(data = data_Lor, aes(x = UMAP_1, y = UMAP_2, colour = Lor), shape = 16, size = point_size, alpha = point_alpha) +
+  scale_colour_gradient(low = "lightgrey", high = "#00BA38") +
+  geom_point(data = data_gene, aes(x = UMAP_1, y = UMAP_2), size = 0.5, shape = 16, color = 'lightgrey', alpha = 0.1) +
+    theme_minimal() +
+  theme(
+    panel.grid = element_blank(),  # 移除网格线
+    panel.border = element_rect(color = "black", fill = NA, size = 1)  # 添加黑色边框
+  )
+ggsave("./Figure5_scRNA_part/JE_K5_epi_Itgb1_umap.pdf")
+```
+## Runx1
+```{r, extract gene expression for genes of interest,fig.width=8,fig.height=7}
+# 构建作图数据
+gene <- c("Runx1", "Odam", "Lor") # Blue color for Odam, Green color for Lor
+
+data_gene <- position
+for (i in 1:length(gene)) {
+  gene_exp <- exp[gene[i],]
+  gene_exp <- t(gene_exp)
+  gene_exp <- as.data.frame(gene_exp)
+  gene_exp$cell <- rownames(gene_exp)
+  data_gene <- merge(data_gene, gene_exp, by='cell')
+}
+
+colnames(data_gene)
+rownames(data_gene) <- data_gene$cell
+data_gene <- data_gene[, -1]
+
+# 设定阈值
+threshold <- 0.5
+
+# 提取表达这些基因的细胞并筛选表达量大于阈值的点
+data_Trp63 <- data_gene[, c(1:3)]
+data_Trp63 <- data_Trp63[which(data_Trp63$Runx1 > 0.2),]
+
+data_Odam <- data_gene[, c(1, 2, 4)]
+data_Odam <- data_Odam[which(data_Odam$Odam > threshold),]
+
+data_Lor <- data_gene[, c(1, 2, 5)]
+data_Lor <- data_Lor[which(data_Lor$Lor > threshold),]
+
+# 设置绘图参数
+point_size <- 1.0
+point_alpha <- 0.6
+
+ggplot() +
+  new_scale("color") +
+  geom_point(data = data_Trp63, aes(x = UMAP_1, y = UMAP_2, colour = Runx1), shape = 16, size = point_size, alpha = point_alpha) +
+  scale_colour_gradient(low = "lightgrey", high = "red") +
+  new_scale("color") +
+  geom_point(data = data_Odam, aes(x = UMAP_1, y = UMAP_2, colour = Odam), shape = 16, size = point_size, alpha = point_alpha) +
+  scale_colour_gradient(low = "lightgrey", high = "#619CFF") +
+  new_scale("color") +
+  geom_point(data = data_Lor, aes(x = UMAP_1, y = UMAP_2, colour = Lor), shape = 16, size = point_size, alpha = point_alpha) +
+  scale_colour_gradient(low = "lightgrey", high = "#00BA38") +
+  geom_point(data = data_gene, aes(x = UMAP_1, y = UMAP_2), size = 0.5, shape = 16, color = 'lightgrey', alpha = 0.1) +
+    theme_minimal() +
+  theme(
+    panel.grid = element_blank(),  # 移除网格线
+    panel.border = element_rect(color = "black", fill = NA, size = 1)  # 添加黑色边框
+  )
+ggsave("./Figure5_scRNA_part/JE_K5_epi_Runx1_umap.pdf")
+```
+
+
+
+# Correlation assay using MAGIC data
+
+
+```{r, extract count matrix}
+JE_combined_epi_MAGIC_RNA<-GetAssayData(object = JE_combined_epi[["MAGIC_SCT"]], slot = "data")
+JE_combined_epi_MAGIC_RNA_table<-as.data.frame(JE_combined_epi_MAGIC_RNA)
+
+head(JE_combined_epi_MAGIC_RNA_table)
+```
+
+This is a matrix for further correlation analysis of any genes of interest.
+
+```{r, transpose the expression matrix}
+JE_combined_epi_MAGIC_RNA_table_t <- t(JE_combined_epi_MAGIC_RNA_table)
+JE_combined_epi_MAGIC_RNA_table_t[1:5,1:10]
+```
+```{r, function for plot custom correlation}
+# Define the function
+plot_custom_correlation <- function(data, x_var, y_var, color_var) {
+  # Calculate correlation between x_var and y_var
+  correlation <- cor(data[[x_var]], data[[y_var]])
+  print(paste("Correlation between", x_var, "and", y_var, ":", correlation))
+  
+  # Plotting the data with custom theme
+  ggplot(data) +
+    geom_point(aes_string(x = x_var, y = y_var, color = color_var), size=0.5) +
+    geom_smooth(aes_string(x = x_var, y = y_var), method = "lm", color = "blue", se = FALSE) +
+    scale_color_viridis(option = "B") +
+    theme(
+      panel.background = element_rect(fill = "white", color = "black", size = 0.5),
+      panel.border = element_rect(color = "black", size = 0.5, fill = NA),
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      axis.line = element_line(color = "black"),
+      plot.background = element_rect(fill = "white", color = NA)
+    ) +
+    annotate("text", x = Inf, y = Inf, label = paste("Correlation:", round(correlation, 2)), 
+             hjust = 1.1, vjust = 2, size = 5, color = "black")
+}
+```
+
+## Runx1 and Odam, Trp63
+
+```{r, Runx1 and Odam, Krt5}
+plot_custom_correlation(JE_combined_epi_MAGIC_RNA_table_t, "Odam", "Runx1", "Trp63")
+ggsave("./Figure5_scRNA_part/correlation_Odam_Runx1_Trp63.pdf", width=6,height=5)
+```
+
+
+
+## Trp63 and Klf4, Odam
+
+```{r, Runx1 and Odam, Trp63}
+plot_custom_correlation(JE_combined_epi_MAGIC_RNA_table_t, "Trp63", "Klf4", "Odam")
+ggsave("./Figure5_scRNA_part/correlation_Trp63_Klf4_Odam.pdf", width=6,height=5)
+```
+
+## Runx1 and Odam, Klf4
+
+```{r, Runx1 and Odam, Klf4}
+plot_custom_correlation(JE_combined_epi_MAGIC_RNA_table_t, "Klf4", "Odam", "Trp63")
+ggsave("./Figure5_scRNA_part/correlation_Odam_Runx1_Klf4.pdf", width=6,height=5)
+```
+
+```{r,Correlation between Runx1 and Odam, Krt5}
+JE_combined_epi_MAGIC_RNA_table_t <- as.data.frame(JE_combined_epi_MAGIC_RNA_table_t)
+ggplot(JE_combined_epi_MAGIC_RNA_table_t) +
+  geom_point(aes(JE_combined_epi_MAGIC_RNA_table_t$Runx1, JE_combined_epi_MAGIC_RNA_table_t$Odam, color=JE_combined_epi_MAGIC_RNA_table_t$Krt5)) +
+  scale_color_viridis(option="B")
+```
+
+```{r}
+# Assuming your data frame is already loaded as JE_combined_epi_MAGIC_RNA_table_t
+JE_combined_epi_MAGIC_RNA_table_t <- as.data.frame(JE_combined_epi_MAGIC_RNA_table_t)
+
+# Calculate correlation between Odam and Runx1
+correlation <- cor(JE_combined_epi_MAGIC_RNA_table_t$Runx1, JE_combined_epi_MAGIC_RNA_table_t$Odam)
+print(correlation)
+
+# Plotting the data with custom theme
+ggplot(JE_combined_epi_MAGIC_RNA_table_t) +
+  geom_point(aes(x = Runx1, y = Odam, color = Krt5)) +
+  geom_smooth(aes(x = Runx1, y = Odam), method = "lm", color = "blue", se = FALSE) +
+  scale_color_viridis(option = "B") +
+  theme(
+    panel.background = element_rect(fill = "white", color = "black", size = 0.5),
+    panel.border = element_rect(color = "black", size = 0.5, fill = NA),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "black"),
+    plot.background = element_rect(fill = "white", color = NA)
+  ) +
+  annotate("text", x = Inf, y = Inf, label = paste("Correlation:", round(correlation, 2)), 
+           hjust = 1.1, vjust = 2, size = 5, color = "black") 
+```
+
+## Runx1 and Odam, P63
+```{r,Correlation between Runx1 and Odam, Krt5}
+JE_combined_epi_MAGIC_RNA_table_t <- as.data.frame(JE_combined_epi_MAGIC_RNA_table_t)
+ggplot(JE_combined_epi_MAGIC_RNA_table_t) +
+  geom_point(aes(JE_combined_epi_MAGIC_RNA_table_t$Runx1, JE_combined_epi_MAGIC_RNA_table_t$Odam, color=JE_combined_epi_MAGIC_RNA_table_t$Trp63)) +
+  scale_color_viridis(option="B")
+```
+
+
+```{r}
+ggplot(JE_combined_epi_MAGIC_RNA_table_t) +
+  geom_point(aes(Moxd1, Axin2, color=Krt5)) +
+  scale_color_viridis(option="B")
+```
+
+```{r}
+ggplot(JE_combined_epi_MAGIC_RNA_table_t) +
+  geom_point(aes(Bmi1, Axin2, color=Krt5)) +
+  scale_color_viridis(option="B")
+```
+#X save Rdata
+
+
+
+```{r}
+
+save(sce_dm, #sce in diffusion map
+     sce, #JE_combined_epi slingshot object
+     counts, # count matrix derived from sce
+     seu, # Seuratobject for D0-D5
+     seu_D0, # Seuratobject for D0
+     sce.trade, #sce fitGAM
+     earlyDERes, # lineage specific driver genes between lineages
+     startRes,#progenitor marker genes within all lineages
+     startRes_all, #progenitor marker genes within each lineages
+     customRes, # lineage specific genes within a specific pseudotime point of a specific lineage
+     endRes, # differentiated cell type markers between lineages
+     patternRes, ##  genes with different expression patterns
+     module_gene, ## different cluster of genes in bifurcation heatmap
+     Module_GO, ## GO annotation for different cluster of genes in bifurcation heatmap
+     file = "./Figure5_scRNA_part/Figure5_scRNA_part.Rdata")
+```
+
+```{r}
+gc()
+rm(list=ls())
+```
+
+
+
+
+
