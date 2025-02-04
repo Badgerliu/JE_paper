@@ -1,0 +1,585 @@
+---
+title: "Mouse JE repair scRNA harmony epi imputation using MAGIC"
+author: "Huan"
+date: "12/12/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  tidy = TRUE,
+  tidy.opts = list(width.cutoff = 120),
+  message = TRUE,
+  warning = FALSE,
+  cache = TRUE
+)
+```
+
+This note was used for imputation exploration for JE_epi.
+We employed the following approaches: MAGIC
+
+# 1 MAGIC
+refering to `http://htmlpreview.github.io/?https://github.com/KrishnaswamyLab/MAGIC/blob/master/Rmagic/inst/examples/bonemarrow_tutorial.html`
+## 1.0 Load data and packages
+```{r load of packages and setup of the environment 1}
+gc()
+rm(list=ls())
+library(Seurat)
+library(SeuratWrappers)
+library(sctransform)
+library(harmony)
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(ggpointdensity)
+library(monocle3)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(cowplot)
+library(clustree)
+library(gridExtra)
+library(phateR)
+library(viridis)
+library(readr)
+library(Rmagic)
+
+set.seed(12)
+theme_set(theme_bw())
+
+JE_combined_epi <- readRDS(file = "./SeuratObject/JE_combined_epi_harmony_20221128.rds")
+
+```
+
+Generate expression matrix
+
+```{r}
+
+JE_combined_epi_RNA<-GetAssayData(object = JE_combined_epi[["RNA"]], slot = "count")
+JE_combined_epi_RNA_table<-as.data.frame(JE_combined_epi_RNA)
+
+head(JE_combined_epi_RNA_table)
+```
+Transpose matrix
+```{r}
+JE_combined_epi_RNA_table_t <- as.matrix(t(JE_combined_epi_RNA_table))
+
+```
+
+```{r}
+row.names(JE_combined_epi_RNA_table_t) <-NULL
+JE_combined_epi_RNA_table_t[1:5,1:10]
+```
+Filter genes expression matrix
+```{r}
+# keep genes expressed in at least 10 cells
+keep_cols <- colSums(JE_combined_epi_RNA_table_t > 0) > 10
+JE_combined_epi_RNA_table_t <- JE_combined_epi_RNA_table_t[,keep_cols]
+# look at the distribution of library sizes
+ggplot() +
+  geom_histogram(aes(x=rowSums(JE_combined_epi_RNA_table_t)), bins=50) +
+  geom_vline(xintercept = 1000, color='red')
+```
+```{r}
+# keep cells with at least 1000 UMIs
+keep_rows <- rowSums(JE_combined_epi_RNA_table_t) > 1000
+JE_combined_epi_RNA_table_t <- JE_combined_epi_RNA_table_t[keep_rows,]
+```
+Normalizing data
+
+We should library size normalize and transform the data prior to MAGIC. Many people use a log transform, which requires adding a “pseudocount” to avoid log(0). We square root instead, which has a similar form but doesn’t suffer from instabilities at zero.
+```{r}
+JE_combined_epi_RNA_table_t <- library.size.normalize(JE_combined_epi_RNA_table_t)
+JE_combined_epi_RNA_table_t <- sqrt(JE_combined_epi_RNA_table_t)
+```
+
+
+
+
+
+
+## 1.1 Further MAGIC for all genes
+Using MAGIC for downstream analysis
+First we will test from two mainly expressed genes
+```{r}
+JE_combined_epi_MAGIC <- magic(JE_combined_epi_RNA_table_t, genes=c("Krt14", "Krt5", "Axin2"))
+```
+
+We can look at the entire smoothed matrix with genes='all_genes', passing the original result to the argument init to avoid recomputing intermediate steps. Note that this matrix may be large and could take up a lot of memory.
+
+```{r}
+JE_combined_epi_MAGIC <- magic(JE_combined_epi, genes="all_genes",
+                     t=4, init=JE_combined_epi_MAGIC)
+```
+
+```{r}
+JE_combined_epi_MAGIC_RNA<-GetAssayData(object = JE_combined_epi_MAGIC[["MAGIC_SCT"]], slot = "data")
+JE_combined_epi_MAGIC_RNA_table<-as.data.frame(JE_combined_epi_MAGIC_RNA)
+
+head(JE_combined_epi_MAGIC_RNA_table)
+```
+
+This is a matrix for further correlation analysis of any genes of interest.
+
+```{r}
+JE_combined_epi_MAGIC_RNA_table_t <- t(JE_combined_epi_MAGIC_RNA_table)
+JE_combined_epi_MAGIC_RNA_table_t[1:5,1:10]
+```
+
+
+```{r}
+JE_combined_epi_MAGIC_RNA_table_t <- as.data.frame(JE_combined_epi_MAGIC_RNA_table_t)
+ggplot(JE_combined_epi_MAGIC_RNA_table_t) +
+  geom_point(aes(JE_combined_epi_MAGIC_RNA_table_t$Ggt1, JE_combined_epi_MAGIC_RNA_table_t$Odam, color=JE_combined_epi_MAGIC_RNA_table_t$Krt5)) +
+  scale_color_viridis(option="B")
+```
+
+```{r}
+ggplot(JE_combined_epi_MAGIC_RNA_table_t) +
+  geom_point(aes(Moxd1, Axin2, color=Krt5)) +
+  scale_color_viridis(option="B")
+```
+
+```{r}
+ggplot(JE_combined_epi_MAGIC_RNA_table_t) +
+  geom_point(aes(Bmi1, Axin2, color=Krt5)) +
+  scale_color_viridis(option="B")
+```
+## 1.2 Standard Seurat for MAGIC object
+*You may probe dims and resolution in details*
+```{r, dimension reduction}
+JE_combined_epi_MAGIC <- RunUMAP(object = JE_combined_epi_MAGIC, assay = "MAGIC_SCT", reduction = "harmony", dims = 1:50) #You may probe dims in details
+Filter(f = function(x) inherits(JE_combined_epi_MAGIC[[x]], "Graph"), names(JE_combined_epi_MAGIC))
+JE_combined_epi_MAGIC <- FindNeighbors(object = JE_combined_epi_MAGIC, assay = "MAGIC_SCT", reduction = "harmony", dims = 1:50) #You may probe dims in details
+```
+```{r}
+Filter(f = function(x) inherits(JE_combined_epi_MAGIC[[x]], "Graph"), names(JE_combined_epi_MAGIC))
+```
+
+
+*For details of probing resolution, refer to `https://cloud.tencent.com/developer/article/1825681`. *
+Here we will set an intermediate seurat object innheriting all the metadata from the formal object.
+```{r, probing resolution parameter}
+
+JE_combined_epi_MAGIC.resolution <- FindClusters(JE_combined_epi_MAGIC, dims=1:50,resolution = seq(from=0,by=.2,length=10))
+
+```
+
+```{r, fig.height=10, fig.width=10}
+clustree(JE_combined_epi_MAGIC.resolution)
+```
+*Choosing resolution is quite arbitrary and no conclusion has been attained before biological validation*
+The `suture.resolution` object has many choice for resultion, such as SCT_snn_res.0.8. You may want to plot and check. Here are some examples:
+```{r, probeing resolution}
+DimPlot(JE_combined_epi_MAGIC.resolution, reduction = "umap", label = T, group.by = "SCT_snn_res.0.2")
+DimPlot(JE_combined_epi_MAGIC.resolution, reduction = "umap", label = T, group.by = "SCT_snn_res.0.4")
+DimPlot(JE_combined_epi_MAGIC.resolution, reduction = "umap", label = T, group.by = "SCT_snn_res.0.6")
+DimPlot(JE_combined_epi_MAGIC.resolution, reduction = "umap", label = T, group.by = "SCT_snn_res.0.8")
+
+```
+
+Here we choose res = 0.4
+
+
+```{r, cluster with a suitable resolution}
+JE_combined_epi_MAGIC <- FindClusters(object = JE_combined_epi_MAGIC, resolution = 0.4) #You may probe resolution in details
+```
+
+```{r, test plot,fig.height=5, fig.width=8}
+plots <- DimPlot(JE_combined_epi_MAGIC, group.by = c("orig.ident", "seurat_clusters"), combine = FALSE, pt.size = .2)
+plots <- lapply(X = plots, FUN = function(x) x + theme(legend.position = "top") + guides(color = guide_legend(nrow = 5, 
+    byrow = TRUE, override.aes = list(size = 4))))
+CombinePlots(plots)
+```
+## 1.3 Save object
+```{r, output integrated data}
+saveRDS(JE_combined_epi_MAGIC, file = "./SeuratObject/JE_combined_epi_harmony_MAGIC_20221128.rds")
+```
+
+
+
+```{r, krt genes feature plot, fig.height=5, fig.width=5}
+FeaturePlot(JE_combined_epi, features = c("Krt5","Lor",
+                                          "Odam","Axin2"),
+            cols = c("#ddf4f5", "#fa3c84"),
+            ncol=2, pt.size = 0.1)
+#ggsave("./OutputFigure/JE_combined_epi_krt_feature.pdf", device = "pdf", width = 15, height = 15, units = "cm")
+
+```
+
+
+
+```{r, krt genes feature plot, fig.height=5, fig.width=5}
+FeaturePlot(JE_combined_epi_MAGIC, features = c("Krt5","Lor",
+                                          "Odam","Top2a"),
+            cols = c("#ddf4f5", "#fa3c84"), label = T,
+            ncol=2, pt.size = 0.1)
+#ggsave("./OutputFigure/JE_combined_epi_krt_feature.pdf", device = "pdf", width = 15, height = 15, units = "cm")
+
+```
+## 1.4 Rename cluster
+According to our in vivo validation based on the marker genes in each cluster, we rename and merge each cluster accordingly
+```{r}
+JE_combined_epi_MAGIC <- readRDS("./SeuratObject/JE_combined_epi_harmony_MAGIC_20221128.rds")
+```
+
+```{r}
+DimPlot(JE_combined_epi_MAGIC, reduction = "umap", split.by  = "orig.ident")
+```
+
+
+```{r}
+DimPlot(JE_combined_epi_MAGIC, reduction = "umap", label = T, group.by = "SCT_snn_res.0.4")
+```
+cluster 9 and cluster 12 are noisy clusters, so we remove them arbitrarily.
+```{r}
+JE_combined_epi_MAGIC <- subset(JE_combined_epi_MAGIC, idents = c(0,1,2,3,4,5,6,7,8,10,11))
+```
+
+With GE stands for gingival epithelium, we renamed the following clusters.
+```{r, rename cluster}
+new.cluster.ids <- c("GE1", #Cluster 0 cells differentiating for wound re-epithelialization with marker genes
+                     "GE2", #Cluster 1 cells differentiating for wound re-epithelialization with marker genes
+                     "GE3", #Cluster 2 G1/S, G2/M cycling cells with marker genes
+                     "GE4", #Cluster 3 Keratinocytes away from the wound edge with marker genes
+                     "GE5", #Cluster 4 cells that immediate early response to wounding with marker genes
+                     "GE6", #Cluster 5 cells with high metabolic level with marker genes
+                     "GE7", #Cluster 6 Junctional epithelium with marker genes
+                     "GE3", #Cluster 7 G1/S, G2/M cycling cells with marker genes
+                     "GE8", #Cluster 8 cells with high metabolic level with marker genes
+                     "9-removed", #Cluster 9 Keratinocytes away from the wound edge with marker genes
+                     "GE9", #Cluster 10 Keratinocyte-fibroblasts with marker genes
+                     "GE9", #Cluster 11 Keratinocyte-fibroblasts with marker genes
+                     "10-removed" #Cluster 12 erythroid/other with marker genes
+                     )
+Idents(JE_combined_epi_MAGIC) <- c("SCT_snn_res.0.4")
+JE_combined_epi_MAGIC@meta.data$seurat_clusters <-JE_combined_epi_MAGIC@meta.data$SCT_snn_res.0.4
+JE_combined_epi_MAGIC@meta.data$celltype<- JE_combined_epi_MAGIC@meta.data$seurat_clusters
+levels(JE_combined_epi_MAGIC@meta.data$celltype) <- new.cluster.ids
+```
+
+```{r}
+DimPlot(JE_combined_epi_MAGIC, reduction = "umap", label = T, group.by = "celltype")
+```
+
+```{r, initial plots}
+Idents(JE_combined_epi_MAGIC) <- c("celltype")
+#group_by_cluster
+plot1 = DimPlot(JE_combined_epi_MAGIC, reduction = "umap", label = T)
+# group_by_sample
+plot2 = DimPlot(JE_combined_epi_MAGIC, reduction = "umap", group.by = "celltype")
+plot3 = DimPlot(JE_combined_epi_MAGIC, reduction = "umap", split.by  = "orig.ident")
+# combine
+plotc <- plot1 + plot2
+ggsave("./OutputFigure/JE_combined_epi_MAGIC_umap.png", plot = plotc, width = 10, height = 5)
+plot3
+ggsave("./OutputFigure/JE_combined_epi_MAGIC_umap_split.png", plot = plot3, width = 12, height = 5) # You may set the parameters, especially the "width". Usually each plot will take about 5.5 unit.
+
+DimPlot(JE_combined_epi_MAGIC, reduction = "umap", label = T)
+DimPlot(JE_combined_epi_MAGIC, reduction = "umap", group.by = "celltype")
+
+```
+
+```{r, output integrated data}
+saveRDS(JE_combined_epi_MAGIC, file = "./SeuratObject/JE_combined_epi_harmony_MAGIC_renamed.rds")
+```
+## 1.5 Marker genes for renamed cluster
+```{r, generally find marker genes}
+Idents(JE_combined_epi_MAGIC) <- JE_combined_epi_MAGIC$celltype
+DefaultAssay(JE_combined_epi_MAGIC) <- "RNA"
+JE_combined_epi_MAGIC <- NormalizeData(JE_combined_epi_MAGIC)
+all.genes <- rownames(JE_combined_epi_MAGIC)
+JE_combined_epi_MAGIC <- ScaleData(JE_combined_epi_MAGIC, features = all.genes)
+JE_combined_epi_MAGIC_markers <- FindAllMarkers(object = JE_combined_epi_MAGIC, only.pos = TRUE, 
+                               min.pct = 0.25, thresh.use = 0.25) #identify positive marker genes 
+top10 <- JE_combined_epi_MAGIC_markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC) # You may change n=10 to other number to get top_n genes as you wish.
+```
+```{r, output tables for marker genes}
+write.csv(JE_combined_epi_MAGIC_markers, file = "./OutputTable/JE_combined_epi_MAGIC_markers_20221228.csv", row.names = FALSE)
+write.csv(top10, file = "./OutputTable/JE_combined_epi_MAGIC_top10_markers_20221228.csv", row.names = FALSE)
+
+
+```
+
+Plot heatmap for marker genes
+```{r, heatmapplot, fig.width=10, fig.height=18 }
+
+DoHeatmap(JE_combined_epi_MAGIC, features = top10$gene)
+ggsave("./OutputFigure/JE_combined_epi_MAGIC_markers_top10_20221228.pdf", device = "pdf",#adjust filename accordingly
+       width = 30, #adjust according to the display of output
+       height = 55, #adjust according to the display of output
+       units = "cm")
+
+```
+
+# 2 3D output for UMAP
+```{r}
+JE_combined_epi_MAGIC <- readRDS(file = "./SeuratObject/JE_combined_epi_harmony_MAGIC_renamed.rds")
+```
+Here we redo the dimension reduction from three layers.
+```{r}
+JE_combined_epi_MAGIC <- RunUMAP(object = JE_combined_epi_MAGIC, assay = "MAGIC_SCT", reduction = "harmony", dims = 1:50,
+                                 n.components = 3L) #You may probe dims in details
+```
+```{r}
+tmp.umap.3<-Embeddings(object = JE_combined_epi_MAGIC[["umap"]])
+```
+
+
+```{r}
+cb_palette <- c("#F8766D", #JE1
+                "#D39200", #JE2
+                "#93AA00", #JE3
+                "#00BA38", #JE4
+                "#00C19F", #JE5
+                "#00B9E3", #JE6
+                "#619CFF", #JE7
+                "#DB72FB", #JE8
+                "#FF61C3" #JE9
+                )
+               
+```
+
+## 2.1 3D UMAP 
+```{r}
+library(plotly)
+tmp.umap.3 <- as.data.frame(tmp.umap.3)
+fig <- plot_ly(tmp.umap.3, x = ~UMAP_1, y = ~UMAP_2, z = ~UMAP_3, color =JE_combined_epi_MAGIC$celltype, 
+               colors = cb_palette,
+               opacity = .5,
+               type = "scatter3d", 
+               size=1)
+fig
+```
+From the 3D plot, we can find GE7 (Odam+ cluster) is tightly connected with GE5 and GE9
+
+## 2.2 3D genes of interest
+```{r, 3D plot for Odam}
+# create a dataframe
+goi <- "Odam"
+plotting.data <- FetchData(object = JE_combined_epi_MAGIC, vars = c("UMAP_1", "UMAP_2", "UMAP_3", "Expression"=goi), slot = 'data')
+
+# Say you want change the scale, so that every cell having an expression >1 will be one color
+# Basically, you are re-adjusting the scale here, so that any cell having a certain expression will light up on your 3D plot
+
+# First make another column in your dataframe, where all values above 1 are re-assigned a value of 1
+# This information is stored in the 'Expression' column of your dataframe
+# Cutoff <- 2
+Cutoff <- quantile(plotting.data[,goi], probs = .99)
+plotting.data$"ExprCutoff" <- ifelse(test = plotting.data[,goi] <Cutoff, yes = plotting.data[,goi], no = Cutoff)
+
+# Add the label column, so that now the column has 'cellname-its expression value'
+plotting.data$label <- paste(rownames(plotting.data)," - ", plotting.data[,goi], sep="")
+
+# Plot your data, in this example my Seurat object had 21 clusters (0-20), and cells express a gene called Odam
+plot_ly(data = plotting.data,
+        # name = goi,
+        x = ~UMAP_1, y = ~UMAP_2, z = ~UMAP_3, 
+        color = ~ExprCutoff, # you can just run this against the column for the gene as well using ~Odam, the algorith will automatically scale in that case based on maximal and minimal values
+        opacity = .5,
+        colors = c("#ddf4f5", "#fa3c84"), 
+        type = "scatter3d", 
+        mode = "markers",
+        marker = list(size = 2), 
+        text=~label,
+        hoverinfo="text"
+) %>%layout(title=goi)
+```
+
+```{r, 3D plot for Cxcl5}
+# create a dataframe
+goi <- "Cxcl5"
+plotting.data <- FetchData(object = JE_combined_epi_MAGIC, vars = c("UMAP_1", "UMAP_2", "UMAP_3", "Expression"=goi), slot = 'data')
+
+# Say you want change the scale, so that every cell having an expression >1 will be one color
+# Basically, you are re-adjusting the scale here, so that any cell having a certain expression will light up on your 3D plot
+
+# First make another column in your dataframe, where all values above 1 are re-assigned a value of 1
+# This information is stored in the 'Expression' column of your dataframe
+# Cutoff <- 2
+Cutoff <- quantile(plotting.data[,goi], probs = .99)
+plotting.data$"ExprCutoff" <- ifelse(test = plotting.data[,goi] <Cutoff, yes = plotting.data[,goi], no = Cutoff)
+
+# Add the label column, so that now the column has 'cellname-its expression value'
+plotting.data$label <- paste(rownames(plotting.data)," - ", plotting.data[,goi], sep="")
+
+# Plot your data, in this example my Seurat object had 21 clusters (0-20), and cells express a gene called Cxcl5
+plot_ly(data = plotting.data,
+        # name = goi,
+        x = ~UMAP_1, y = ~UMAP_2, z = ~UMAP_3, 
+        color = ~ExprCutoff, # you can just run this against the column for the gene as well using ~Odam, the algorith will automatically scale in that case based on maximal and minimal values
+        opacity = .5,
+        colors = c("#ddf4f5", "#fa3c84"), 
+        type = "scatter3d", 
+        mode = "markers",
+        marker = list(size = 2), 
+        text=~label,
+        hoverinfo="text"
+) %>%layout(title=goi)
+```
+
+```{r, 3D plot for Axin2}
+# create a dataframe
+goi <- "Axin2"
+plotting.data <- FetchData(object = JE_combined_epi_MAGIC, vars = c("UMAP_1", "UMAP_2", "UMAP_3", "Expression"=goi), slot = 'data')
+
+# Say you want change the scale, so that every cell having an expression >1 will be one color
+# Basically, you are re-adjusting the scale here, so that any cell having a certain expression will light up on your 3D plot
+
+# First make another column in your dataframe, where all values above 1 are re-assigned a value of 1
+# This information is stored in the 'Expression' column of your dataframe
+# Cutoff <- 2
+Cutoff <- quantile(plotting.data[,goi], probs = .99)
+plotting.data$"ExprCutoff" <- ifelse(test = plotting.data[,goi] <Cutoff, yes = plotting.data[,goi], no = Cutoff)
+
+# Add the label column, so that now the column has 'cellname-its expression value'
+plotting.data$label <- paste(rownames(plotting.data)," - ", plotting.data[,goi], sep="")
+
+# Plot your data, in this example my Seurat object had 21 clusters (0-20), and cells express a gene called Axin2
+plot_ly(data = plotting.data,
+        # name = goi,
+        x = ~UMAP_1, y = ~UMAP_2, z = ~UMAP_3, 
+        color = ~ExprCutoff, # you can just run this against the column for the gene as well using ~Axin2, the algorith will automatically scale in that case based on maximal and minimal values
+        opacity = .5,
+        colors = c("#ddf4f5", "#fa3c84"), 
+        type = "scatter3d", 
+        mode = "markers",
+        marker = list(size = 2), 
+        text=~label,
+        hoverinfo="text"
+) %>%layout(title=goi)
+```
+```{r, 3D plot for Top2a}
+# create a dataframe
+goi <- "Top2a"
+plotting.data <- FetchData(object = JE_combined_epi_MAGIC, vars = c("UMAP_1", "UMAP_2", "UMAP_3", "Expression"=goi), slot = 'data')
+
+# Say you want change the scale, so that every cell having an expression >1 will be one color
+# Basically, you are re-adjusting the scale here, so that any cell having a certain expression will light up on your 3D plot
+
+# First make another column in your dataframe, where all values above 1 are re-assigned a value of 1
+# This information is stored in the 'Expression' column of your dataframe
+# Cutoff <- 2
+Cutoff <- quantile(plotting.data[,goi], probs = .99)
+plotting.data$"ExprCutoff" <- ifelse(test = plotting.data[,goi] <Cutoff, yes = plotting.data[,goi], no = Cutoff)
+
+# Add the label column, so that now the column has 'cellname-its expression value'
+plotting.data$label <- paste(rownames(plotting.data)," - ", plotting.data[,goi], sep="")
+
+# Plot your data, in this example my Seurat object had 21 clusters (0-20), and cells express a gene called ACTB
+plot_ly(data = plotting.data,
+        # name = goi,
+        x = ~UMAP_1, y = ~UMAP_2, z = ~UMAP_3, 
+        color = ~ExprCutoff, # you can just run this against the column for the gene as well using ~ACTB, the algorith will automatically scale in that case based on maximal and minimal values
+        opacity = .5,
+        colors = c("#ddf4f5", "#fa3c84"), 
+        type = "scatter3d", 
+        mode = "markers",
+        marker = list(size = 2), 
+        text=~label,
+        hoverinfo="text"
+) %>%layout(title=goi)
+```
+```{r, 3D plot for Lor}
+# create a dataframe
+goi <- "Lor"
+plotting.data <- FetchData(object = JE_combined_epi_MAGIC, vars = c("UMAP_1", "UMAP_2", "UMAP_3", "Expression"=goi), slot = 'data')
+
+# Say you want change the scale, so that every cell having an expression >1 will be one color
+# Basically, you are re-adjusting the scale here, so that any cell having a certain expression will light up on your 3D plot
+
+# First make another column in your dataframe, where all values above 1 are re-assigned a value of 1
+# This information is stored in the 'Expression' column of your dataframe
+# Cutoff <- 2
+Cutoff <- quantile(plotting.data[,goi], probs = .99)
+plotting.data$"ExprCutoff" <- ifelse(test = plotting.data[,goi] <Cutoff, yes = plotting.data[,goi], no = Cutoff)
+
+# Add the label column, so that now the column has 'cellname-its expression value'
+plotting.data$label <- paste(rownames(plotting.data)," - ", plotting.data[,goi], sep="")
+
+# Plot your data, in this example my Seurat object had 21 clusters (0-20), and cells express a gene called Lor
+plot_ly(data = plotting.data,
+        # name = goi,
+        x = ~UMAP_1, y = ~UMAP_2, z = ~UMAP_3, 
+        color = ~ExprCutoff, # you can just run this against the column for the gene as well using ~Lor, the algorith will automatically scale in that case based on maximal and minimal values
+        opacity = .5,
+        colors = c("#ddf4f5", "#fa3c84"), 
+        type = "scatter3d", 
+        mode = "markers",
+        marker = list(size = 2), 
+        text=~label,
+        hoverinfo="text"
+) %>%layout(title=goi)
+```
+
+
+
+
+## 2.3 Save the output
+```{r}
+saveRDS(JE_combined_epi_MAGIC, "./SeuratObject/JE_combined_epi_MAGIC_3D.rds")
+
+```
+
+
+
+
+
+#3 Generate scVelo attributes
+Load data again.
+```{r}
+JE_combined_epi_MAGIC <- readRDS(file = "./SeuratObject/JE_combined_epi_harmony_MAGIC_renamed.rds")
+```
+
+```{r, prepare parameter matrix of combined JE for scvelo}
+# Export filtered cell ID
+JE_combined_epi_MAGIC_cells <- as.data.frame(Cells(JE_combined_epi_MAGIC))
+head(JE_combined_epi_MAGIC_cells)
+write.csv(JE_combined_epi_MAGIC_cells, file = "./scVeloInput/JE_combined_epi_MAGIC_cellID_obs.csv",row.names = FALSE)
+
+# Export umap coordinates
+umap_JE_combined_epi_MAGIC <- Embeddings(JE_combined_epi_MAGIC, reduction = "umap")
+head(JE_combined_epi_MAGIC)
+umap_JE_combined_epi_MAGIC[1:3,1:2]
+write.csv(umap_JE_combined_epi_MAGIC, file = "./scVeloInput/JE_combined_epi_MAGIC_cell_embeddings.csv",row.names = TRUE)
+
+# Export cluster information
+## Here we used celltype.
+head(JE_combined_epi_MAGIC@meta.data$celltype) #
+cluster_head <-JE_combined_epi_MAGIC@meta.data$celltype # Optional
+cluster_head <- as.data.frame(cluster_head)
+cluster_info <- cbind(JE_combined_epi_MAGIC_cells$`Cells(JE_combined_epi_MAGIC)`, cluster_head)
+colnames(cluster_info) <- c("Unnamed", "celltype") #if you are working with celltype, change `seurat_cluster` into `celltype` accordingly.
+write.csv(cluster_info, file = "./scVeloInput/JE_combined_epi_MAGIC_clusters.csv",row.names = FALSE)
+```
+
+
+# 4 Subset two paths
+From PAGA analysis, we can clear find there are two paths: GE1, GE5, GE9, GE3 and GE7; GE1 GE8 GE2, GE6 and GE4
+We are going to subset these two paths for monocle analysis
+```{r}
+JE_combined_epi_MAGIC_GE7 <- subset(JE_combined_epi_MAGIC, idents = c("GE1", "GE5", "GE9", "GE3", "GE7"))
+
+JE_combined_epi_MAGIC_GE4 <- subset(JE_combined_epi_MAGIC, idents = c("GE1", "GE8", "GE2", "GE6", "GE4"))
+```
+
+
+```{r}
+DimPlot(JE_combined_epi_MAGIC_GE7, reduction = "umap", label = T)
+DimPlot(JE_combined_epi_MAGIC_GE7, reduction = "umap", group.by = "celltype")
+
+```
+
+
+```{r}
+DimPlot(JE_combined_epi_MAGIC_GE4, reduction = "umap", label = T)
+DimPlot(JE_combined_epi_MAGIC_GE4, reduction = "umap", group.by = "celltype")
+
+```
+
+```{r}
+saveRDS(JE_combined_epi_MAGIC_GE7, file = "./SeuratObject/JE_combined_epi_MAGIC_GE7_20221128.rds")
+saveRDS(JE_combined_epi_MAGIC_GE4, file = "./SeuratObject/JE_combined_epi_MAGIC_GE4_20221128.rds")
+```
+
