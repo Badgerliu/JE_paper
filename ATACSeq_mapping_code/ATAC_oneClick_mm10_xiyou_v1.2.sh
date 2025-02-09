@@ -1,4 +1,9 @@
 #!/bin/bash
+# Author Huan Liu
+# Author Organization Wuhan University School of Stomatology
+# Usage: Working with ATAC-seq raw fq.gz files and resulted in bam, bw and peak files for whole peaks and NFRs, EXCLUDING MNR, DNR etc.
+# Date: 2022-10-02
+
 set -euo pipefail
 
 # Configuration Section - Users should modify these paths
