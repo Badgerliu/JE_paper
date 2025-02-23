@@ -1,0 +1,1074 @@
+---
+title: "1st Round Mouse JE repair scRNA harmony epithelium object downstream analysis"
+author: "Huan"
+date: "11/22/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  tidy = TRUE,
+  tidy.opts = list(width.cutoff = 120),
+  message = TRUE,
+  warning = FALSE,
+  cache = TRUE
+)
+```
+
+This note was used for single cell RNA-seq analysis of mouse periodontal tissues before or after injury (D0, D3, D5).
+The main purpose of this note is to generate a in-depth understanding for the integrated epi cluster of JE.
+
+# 1 Setup of analysis environment
+## 1.1 Package installation 
+Seurat (v3), harmony,ggplot2,magrittr and sctransform packages were installed.
+
+## 1.2 Load environment and packages
+```{r load of packages and setup of the environment}
+gc()
+rm(list=ls())
+library(Seurat)
+library(SeuratWrappers)
+library(sctransform)
+library(harmony)
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(ggpointdensity)
+library(monocle3)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(cowplot)
+library(clustree)
+library(gridExtra)
+library(CellChat)
+set.seed(12)
+theme_set(theme_bw())
+
+JE_combined_epi <- readRDS(file = "./SeuratObject/JE_combined_epi_raw_20221130.rds")
+
+
+```
+
+## 1.4 Review saved Seurat objects
+```{r, review save object}
+DimPlot(JE_combined_epi, reduction = "umap", label = T)
+DimPlot(JE_combined_epi, reduction = "umap", group.by = "orig.ident")
+DimPlot(JE_combined_epi, reduction = "umap", split.by  = "orig.ident")
+
+```
+We reperform the dimension reduction and clustering
+
+## 1.4 Rerun harmony
+
+```{r, scale, normalzation and integration}
+JE_combined_epi.list <- SplitObject(object = JE_combined_epi, split.by = "orig.ident")
+for (i in 1:length(JE_combined_epi.list)) {
+    JE_combined_epi.list[[i]] <- SCTransform(JE_combined_epi.list[[i]], verbose = FALSE)
+} #I'm not sure if the split and merge is necessary, but it won't cause trouble
+```
+
+
+Following the discussion in `https://github.com/immunogenomics/harmony/issues/41`
+```{r, select integration feature for the merged dataset}
+JE_combined_epi.features <- SelectIntegrationFeatures(object.list = JE_combined_epi.list, nfeatures = 3000)
+JE_combined_epi <- merge(JE_combined_epi.list[[1]],
+                   y = JE_combined_epi.list[2:length(JE_combined_epi.list)],  
+                   project = "JE_combined_epi", 
+                   merge.data = TRUE)
+VariableFeatures(JE_combined_epi) <- JE_combined_epi.features
+```
+
+
+PCA using SCT features
+```{r,PCA using SCT features}
+JE_combined_epi <- RunPCA(object = JE_combined_epi, assay = "SCT", npcs = 50)
+```
+
+```{r, integration and batch effect removal using hamony}
+system.time({
+    JE_combined_epi <- RunHarmony(object = JE_combined_epi, 
+                            assay.use = "SCT",
+                            reduction = "pca",
+                            dims.use = 1:50,
+                            group.by.vars = "orig.ident",
+                            plot_convergence = TRUE)
+})
+```
+## 1.5 Probing resolution
+*You may probe dims and resolution in details*
+```{r, dimension reduction}
+JE_combined_epi <- RunUMAP(object = JE_combined_epi, assay = "SCT", reduction = "harmony", dims = 1:50) #You may probe dims in details
+Filter(f = function(x) inherits(JE_combined_epi[[x]], "Graph"), names(JE_combined_epi))
+JE_combined_epi <- FindNeighbors(object = JE_combined_epi, assay = "SCT", reduction = "harmony", dims = 1:50) #You may probe dims in details
+```
+```{r}
+Filter(f = function(x) inherits(JE_combined_epi[[x]], "Graph"), names(JE_combined_epi))
+```
+
+
+*For details of probing resolution, refer to `https://cloud.tencent.com/developer/article/1825681`. *
+Here we will set an intermediate seurat object innheriting all the metadata from the formal object.
+```{r, probing resolution parameter}
+
+JE_combined_epi.resolution <- FindClusters(JE_combined_epi, dims=1:50,resolution = seq(from=0,by=.2,length=10))
+
+```
+
+```{r, fig.height=10, fig.width=10}
+clustree(JE_combined_epi.resolution)
+```
+*Choosing resolution is quite arbitrary and no conclusion has been attained before biological validation*
+The `suture.resolution` object has many choice for resultion, such as SCT_snn_res.0.8. You may want to plot and check. Here are some examples:
+```{r, probeing resolution}
+DimPlot(JE_combined_epi.resolution, reduction = "umap", label = T, group.by = "SCT_snn_res.0.2")
+DimPlot(JE_combined_epi.resolution, reduction = "umap", label = T, group.by = "SCT_snn_res.0.4")
+DimPlot(JE_combined_epi.resolution, reduction = "umap", label = T, group.by = "SCT_snn_res.0.6")
+DimPlot(JE_combined_epi.resolution, reduction = "umap", label = T, group.by = "SCT_snn_res.0.8")
+
+```
+
+Here we choose res = 0.4
+
+
+```{r, cluster with a suitable resolution}
+JE_combined_epi <- FindClusters(object = JE_combined_epi, resolution = 0.4) #You may probe resolution in details
+```
+
+```{r, test plot,fig.height=5, fig.width=8}
+plots <- DimPlot(JE_combined_epi, group.by = c("orig.ident", "seurat_clusters"), combine = FALSE, pt.size = .2)
+plots <- lapply(X = plots, FUN = function(x) x + theme(legend.position = "top") + guides(color = guide_legend(nrow = 5, 
+    byrow = TRUE, override.aes = list(size = 4))))
+CombinePlots(plots)
+```
+
+## 1.6 Initial plots 
+After the clustering, we are eager to see the topological relationship between different clusters.
+```{r, initial plots}
+#group_by_cluster
+plot1 = DimPlot(JE_combined_epi, reduction = "umap", label = T)
+# group_by_sample
+plot2 = DimPlot(JE_combined_epi, reduction = "umap", group.by = "orig.ident")
+plot3 = DimPlot(JE_combined_epi, reduction = "umap", split.by  = "orig.ident")
+# combine
+plotc <- plot1 + plot2
+ggsave("./OutputFigure/JE_combined_epi_umap.png", plot = plotc, width = 10, height = 5)
+plot3
+ggsave("./OutputFigure/JE_combined_epi_umap_split.png", plot = plot3, width = 12, height = 5) # You may set the parameters, especially the "width". Usually each plot will take about 5.5 unit.
+
+DimPlot(JE_combined_epi, reduction = "umap", label = T)
+DimPlot(JE_combined_epi, reduction = "umap", group.by = "orig.ident")
+
+```
+
+
+## 1.7 Save object
+```{r, output integrated data}
+saveRDS(JE_combined_epi, file = "./SeuratObject/JE_combined_epi_harmony_20221128.rds")
+```
+
+For replication of the work, I split and saved object depending on orig.idents.
+
+```{r, object split and saved }
+JE_combined_epi_list <- SplitObject(JE_combined_epi, split.by = "orig.ident")
+D0 <-JE_combined_epi_list[["D0"]]
+saveRDS(D0, file = "./SeuratObject/JE_combined_epi_harmony_D0_20221128.rds")
+D3 <-JE_combined_epi_list[["D3"]]
+saveRDS(D3, file = "./SeuratObject/JE_combined_epi_harmony_D3_20221128.rds")
+D5 <-JE_combined_epi_list[["D5"]]
+saveRDS(D5, file = "./SeuratObject/JE_combined_epi_harmony_D5_20221128.rds")
+```
+
+
+# 2 Initial marker genes check
+## 2.0 Load package and datasets
+```{r load of packages and setup of the environment}
+gc()
+rm(list=ls())
+library(Seurat)
+library(SeuratWrappers)
+library(sctransform)
+library(harmony)
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(ggpointdensity)
+library(monocle3)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(cowplot)
+library(clustree)
+library(gridExtra)
+library(CellChat)
+set.seed(12)
+theme_set(theme_bw())
+
+JE_combined_epi <- readRDS(file = "./SeuratObject/JE_combined_epi_harmony_20221128.rds")
+
+
+```
+
+
+# 2.1 Cell cycle score
+```{r, cell cycle score}
+# A list of cell cycle markers, from Tirosh et al, 2015, is loaded with Seurat.  We can
+# segregate this list into markers of G2/M phase and markers of S phase
+s.genes <- cc.genes$s.genes
+g2m.genes <- cc.genes$g2m.genes
+JE_combined_epi <- CellCycleScoring(JE_combined_epi, s.features = s.genes, g2m.features = g2m.genes, set.ident = TRUE)
+```
+
+```{r,Visualize the distribution of cell cycle markers across}
+# Visualize the distribution of cell cycle markers across
+RidgePlot(JE_combined_epi, features = c("Pcna", "Top2a", "Mcm6", "Mki67"), ncol = 2)
+ggsave("./OutputFigure/JE_combined_epi_cell_cycle_RidgePlot.pdf", device = "pdf", width = 25, height = 20, units = "cm")
+DimPlot(JE_combined_epi, reduction = "umap", label = T)
+ggsave("./OutputFigure/JE_combined_epi_cell_cycle_umap_label.pdf", device = "pdf", width = 18, height = 15, units = "cm")
+DimPlot(JE_combined_epi, reduction = "umap", group.by = "orig.ident")
+ggsave("./OutputFigure/JE_combined_epi_cell_cycle_umap_group.pdf", device = "pdf", width = 18, height = 15, units = "cm")
+
+DimPlot(JE_combined_epi, reduction = "umap", split.by  = "orig.ident")
+ggsave("./OutputFigure/JE_combined_epi_cell_cycle_umap_split.pdf", device = "pdf", width = 40, height = 15, units = "cm")
+
+```
+Always remember that if you assign a new ident set, double check the active ident (of course currently it is "Phase"). Now reset the active idents.
+```{r, set the active ident to `res=0.4`}
+Idents(JE_combined_epi) <- c("RNA_snn_res.0.4")
+```
+
+Feature plot for cell cycle genes
+```{r, cell cycle genes feature plot split, fig.height=10, fig.width=10}
+FeaturePlot(JE_combined_epi, features = c("Pcna","Top2a",
+                                          "Mcm6","Mki67"),
+            cols = c("#ddf4f5", "#fa3c84"),
+            ncol=2, pt.size = 0.1,split.by = "orig.ident")
+ggsave("./OutputFigure/JE_combined_epi_cell_cycle_feature_split.pdf", device = "pdf", width = 20, height = 20, units = "cm")
+
+```
+
+```{r, cell cycle genes feature plot, fig.height=5, fig.width=5}
+FeaturePlot(JE_combined_epi, features = c("Pcna","Top2a",
+                                          "Mcm6","Mki67"),
+            cols = c("#ddf4f5", "#fa3c84"),
+            ncol=2, pt.size = 0.1)
+ggsave("./OutputFigure/JE_combined_epi_cell_cycle_feature.pdf", device = "pdf", width = 15, height = 15, units = "cm")
+
+```
+
+### 2.2 Typical Krt genes
+```{r, krt genes feature plot, fig.height=5, fig.width=5}
+FeaturePlot(JE_combined_epi, features = c("Krt14","Krt5",
+                                          "Krtdap","Lor"),
+            cols = c("#ddf4f5", "#fa3c84"),
+            ncol=2, pt.size = 0.1)
+ggsave("./OutputFigure/JE_combined_epi_krt_feature.pdf", device = "pdf", width = 15, height = 15, units = "cm")
+
+```
+
+```{r, two-color plot for different krt genes,fig.height=5, fig.width=15}
+FeaturePlot(object = JE_combined_epi, features = c("Krt5", "Lor"), cols= c("#ddf4f5", "orange", "blue", "green"), blend  = TRUE)
+
+```
+
+
+```{r, gene set Feature plot for krt gene, fig.width=5, fig.height=5}
+basal_marker_gene_list <- list(c("Krt14", "Krt5"))
+top_marker_gene_list <- list(c("Krtdap", "Lor"))
+object <- AddModuleScore(object = JE_combined_epi, features = basal_marker_gene_list, name = "basal_marker_gene")
+FeaturePlot(object = object, features = "basal_marker_gene1",pt.size = 0.1)+
+  scale_color_viridis(discrete = FALSE, option="turbo")
+ggsave("./OutputFigure/JE_combined_epi_krt_basal_module_feature.pdf", device = "pdf", width = 15, height = 15, units = "cm")
+object <- AddModuleScore(object = JE_combined_epi, features = top_marker_gene_list, name = "top_marker_gene")
+FeaturePlot(object = object, features = "top_marker_gene1",pt.size = 0.1)+
+  scale_color_viridis(discrete = FALSE, option="turbo")
+ggsave("./OutputFigure/JE_combined_epi_krt_top_module_feature.pdf", device = "pdf", width = 15, height = 15, units = "cm")
+```
+
+```{r, krt genes feature plot split, fig.height=5, fig.width=5}
+FeaturePlot(JE_combined_epi, features = c("Krt14","Krt5",
+                                          "Krtdap","Lor"),
+            cols = c("#ddf4f5", "#fa3c84"),
+            ncol=2, pt.size = 0.1,split.by = "orig.ident")
+ggsave("./OutputFigure/JE_combined_epi_krt_feature_split.pdf", device = "pdf", width = 20, height = 20, units = "cm")
+
+```
+
+##2.3 JE markers
+```{r, JE genes feature plot,fig.width=5, fig.height=13}
+FeaturePlot(JE_combined_epi, features = c("Lama5","Itgb4","Itga2","Itga3","Itgb1","Krt19","Sdc1","Sdc3","Sdc4","Odam","Cdo1"),
+            ncol=2, pt.size = 0.1)
+#ggsave("./OutputFigure/JE_combined_epi_JE_Markers_feature.pdf", device = "pdf", width = 15, height = 15, units = "cm")
+
+```
+
+```{r, JE genes feature plot split, fig.height=28, fig.width=7}
+FeaturePlot(JE_combined_epi, features = c("Lama5","Itgb4","Itga2","Itga3","Itgb1","Krt19","Sdc1","Sdc3","Sdc4","Odam","Cdo1"),
+            ncol=2, pt.size = 0.1,split.by = "orig.ident")
+#ggsave("./OutputFigure/JE_combined_epi_JE_Markers_feature_split.pdf", device = "pdf", width = 20, height = 20, units = "cm")
+
+```
+
+```{r, vlplot for JE markers,fig.height=6, fig.width=10}
+VlnPlot(object = JE_combined_epi, features =  c("Lama5","Itgb4","Itga2","Itga3","Itgb1","Krt19","Sdc1","Sdc3","Sdc4","Odam","Cdo1"))
+ggsave("./OutputFigure/JE_combined_epi_JEMarkers_violinplot.pdf", device = "pdf", width = 20, height = 15, units = "cm")
+```
+
+## 2.4 Stem cell markers
+```{r, stem cell genes feature plot, fig.height=5, fig.width=5}
+FeaturePlot(JE_combined_epi, features = c("Lrig1","Bmi1",
+                                          "Axin2","Gli1"),
+            ncol=2, pt.size = 0.3)
+#ggsave("./OutputFigure/JE_combined_epi_stem_feature.pdf", device = "pdf", width = 15, height = 15, units = "cm")
+
+```
+
+
+```{r, stem cell genes feature plot split, fig.height=5, fig.width=5}
+FeaturePlot(JE_combined_epi, features = c("Lrig1","Bmi1",
+                                          "Axin2","Klf4"),
+            ncol=2, pt.size = 0.1,split.by = "orig.ident")
+#ggsave("./OutputFigure/JE_combined_epi_krt_feature_split.pdf", device = "pdf", width = 20, height = 20, units = "cm")
+
+```
+```{r, vlplot for stem cell markers,fig.height=6, fig.width=10}
+VlnPlot(object = JE_combined_epi, features =  c("Lrig1","Bmi1",
+                                          "Axin2","Klf4"), group.by = "seurat_clusters")
+#ggsave("./OutputFigure/JE_combined_epi_stem_Markers_violinplot.pdf", device = "pdf", width = 20, height = 15, units = "cm")
+```
+
+
+# 3 Marker genes identification
+## 3.1 Marker genes identification
+Identification of marker genes
+refer to `https://github.com/satijalab/seurat/issues/2115` Perform DE using RNA rather than SCT
+
+```{r, generally find marker genes}
+Idents(JE_combined_epi) <- JE_combined_epi$seurat_clusters
+DefaultAssay(JE_combined_epi) <- "RNA"
+JE_combined_epi <- NormalizeData(JE_combined_epi)
+all.genes <- rownames(JE_combined_epi)
+JE_combined_epi <- ScaleData(JE_combined_epi, features = all.genes)
+JE_combined_epi_markers <- FindAllMarkers(object = JE_combined_epi, only.pos = TRUE, 
+                               min.pct = 0.25, thresh.use = 0.25) #identify positive marker genes 
+top10 <- JE_combined_epi_markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC) # You may change n=10 to other number to get top_n genes as you wish.
+```
+
+```{r, output tables for marker genes}
+write.csv(JE_combined_epi_markers, file = "./OutputTable/JE_combined_epi_markers_20221128.csv", row.names = FALSE)
+write.csv(top10, file = "./OutputTable/JE_combined_epi_top10_markers_20221128.csv", row.names = FALSE)
+
+
+```
+
+Plot heatmap for marker genes
+```{r, heatmapplot, fig.width=10, fig.height=18 }
+
+DoHeatmap(JE_combined_epi, features = top10$gene)
+ggsave("./OutputFigure/JE_combined_epi_markers_top10_20221128.pdf", device = "pdf",#adjust filename accordingly
+       width = 30, #adjust according to the display of output
+       height = 55, #adjust according to the display of output
+       units = "cm")
+
+```
+
+
+## 3.2  Other checked gennes for in vivo validation
+
+```{r, other genes feature plot 1, fig.height=5, fig.width=5}
+FeaturePlot(JE_combined_epi, features = c("Krt14","Krt5",
+                                          "Krtdap","Lor"),
+            cols = c("#ddf4f5", "#fa3c84"),
+            ncol=2, pt.size = 0.1)
+ggsave("./Output_Figure/JE_combined_epi_krt_feature.pdf", device = "pdf", width = 15, height = 15, units = "cm")
+
+```
+
+
+```{r, krt genes feature plot split, fig.height=5, fig.width=5}
+FeaturePlot(JE_combined_epi, features = c("Krt14","Krt5",
+                                          "Krtdap","Lor"),
+            cols = c("#ddf4f5", "#fa3c84"),
+            ncol=2, pt.size = 0.1,split.by = "orig.ident")
+ggsave("./Output_Figure/JE_combined_epi_krt_feature_split.pdf", device = "pdf", width = 20, height = 20, units = "cm")
+
+```
+
+## 3.3 Rename cluster
+Based on our previous in vivo validation, we renamed the cluster using 
+```{r, setup gene list}
+
+genes_to_check <- c("Dsg1", 
+                    "Mki67","Cdc20","Top2a",
+                    "Fosl1","Egr1",
+                    "Dlk2","Jag2",
+                    "Notch1",
+                    "Xist",
+                    "Odam","Cdo1",
+                    "S100a8","S100a9",
+                    "Krt6b","Krt10",
+                    "Krt1", 
+                    "Il24","Acta2",
+                    "Alas")
+```
+
+```{r, cluster version of dotplot for marker genes, fig.width= 6, fig.height=6}
+Idents(JE_combined_epi) <- c("RNA_snn_res.0.4")
+library(FlexDotPlot)
+dp = DotPlot(JE_combined_epi, features = unique(genes_to_check)) + RotatedAxis()
+dot_plot(dp$data[,c(3,4,1,2,5)],
+         size_var = 'pct.exp',
+         col_var = 'avg.exp.scaled',
+         size_legend = 'Percent Expressed',
+         col_legend = 'Average Expression',
+         x.lab.pos = 'bottom',
+         y.lab.pos = 'right',
+         display_max_sizes = F,
+         shape.scale = 8,
+         hclust_method = 'ward.D2',
+         dend_x_var = c('pct.exp','avg.exp.scaled'),
+         dend_y_var = c('pct.exp','avg.exp.scaled'),
+         text.size = 0.5,
+         text.vjust = 0.5,
+         size.breaks.number = 6,
+         color.breaks.number = 4,
+         x.lab.size.factor = 0.8,
+         cols.use = c('#330066','#336699','#66CC66','#FFCC33'),
+         y.lab.size.factor = 1)
+#ggsave("./Output_Figure/JE_combined_harmony_dotplot_marker_genes.pdf",width = 120,height = 150)
+```
+Based on our understanding of marker genes in each cluster, we rename/merged them respectively
+```{r, rename cluster}
+new.cluster.ids <- c("0", #Cluster 0 cells differentiating for wound re-epithelialization with marker genes
+                     "1", #Cluster 1 cells differentiating for wound re-epithelialization with marker genes
+                     "2", #Cluster 2 G1/S, G2/M cycling cells with marker genes
+                     "3", #Cluster 3 Keratinocytes away from the wound edge with marker genes
+                     "4", #Cluster 4 cells that immediate early response to wounding with marker genes
+                     "5", #Cluster 5 cells with high metabolic level with marker genes
+                     "6", #Cluster 6 Junctional epithelium with marker genes
+                     "2", #Cluster 7 G1/S, G2/M cycling cells with marker genes
+                     "5", #Cluster 8 cells with high metabolic level with marker genes
+                     "3", #Cluster 9 Keratinocytes away from the wound edge with marker genes
+                     "7", #Cluster 10 Keratinocyte-fibroblasts with marker genes
+                     "7", #Cluster 11 Keratinocyte-fibroblasts with marker genes
+                     "8" #Cluster 12 erythroid/other with marker genes
+                     )
+Idents(JE_combined_epi) <- c("RNA_snn_res.0.4")
+JE_combined_epi@meta.data$seurat_clusters <-JE_combined_epi@meta.data$RNA_snn_res.0.4
+JE_combined_epi@meta.data$celltype<- JE_combined_epi@meta.data$seurat_clusters
+levels(JE_combined_epi@meta.data$celltype) <- new.cluster.ids
+```
+
+```{r,dotplot for cell types,fig.height=4, fig.width=9.5}
+DotPlot(JE_combined_epi, features = unique(genes_to_check),group.by = "celltype")+RotatedAxis()+
+  scale_x_discrete("")+scale_y_discrete("")
+ggsave("./Output_Figure/JE_combined_epi_harmony_dotplot.pdf",width = 9.5,height = 4)
+
+```
+```{r, another version of dotplot for marker genes}
+Idents(JE_combined_epi) <- JE_combined_epi$celltype
+DotPlot(JE_combined_epi, features=unique(genes_to_check))+
+  theme_bw()+
+  theme(panel.grid = element_blank(), axis.text.x = element_text(angle=45,hjust = 0.5, vjust = 0.5))+
+  labs(x=NULL, y=NULL)+ guides(size = guide_legend(order=3))+
+  scale_color_gradientn(values = seq(0,1,0.2), colours = c('#330066', '#336699','#66CC66','#FFCC33'))
+ggsave("./Output_Figure/JE_combined_epi_harmony_dotplot_two_color.pdf",width = 9.5,height = 4)
+```
+## 3.4 Feature plots for renamed cluster
+```{r,umap plot fore renamed cluster}
+DimPlot(JE_combined_epi, reduction = "umap", label = T)
+ggsave("./Output_Figure/JE_combined_epi_renamed_umap.pdf", device = "pdf", width = 15, height = 15, units = "cm")
+DimPlot(JE_combined_epi, reduction = "umap", group.by = "orig.ident")
+ggsave("./Output_Figure/JE_combined_epi_renamed_umap_ident.pdf", device = "pdf", width = 15, height = 15, units = "cm")
+
+DimPlot(JE_combined_epi, reduction = "umap", split.by  = "orig.ident")
+ggsave("./Output_Figure/JE_combined_epi_renamed_umap_splitident.pdf", device = "pdf", width = 30, height = 15, units = "cm")
+
+```
+cluster 1
+
+```{r, other genes featurePlot for cluster 1, fig.height=5, fig.width=5}
+FeaturePlot(JE_combined_epi, features = c("Mki67","Cdc20",
+                                          "Top2a","Gmnn"),
+            cols = c("#ddf4f5", "#fa3c84"),label=T,
+            ncol=2, pt.size = 0.1)
+ggsave("./Output_Figure/JE_combined_epi_renamed_cluster_1_feature.pdf", device = "pdf", width = 15, height = 15, units = "cm")
+
+```
+
+
+```{r, krt genes feature plot split, fig.height=15, fig.width=15}
+FeaturePlot(JE_combined_epi, features = c("Mki67","Cdc20",
+                                          "Top2a","Gmnn"),
+            cols = c("#ddf4f5", "#fa3c84"), label = T,
+            ncol=2, pt.size = 0.1,split.by = "orig.ident")
+ggsave("./Output_Figure/JE_combined_epi_renamed_cluster_1_feature_split.pdf", device = "pdf", width = 20, height = 20, units = "cm")
+
+```
+
+```{r, other genes featurePlot for cluster 1, fig.height=5, fig.width=5}
+FeaturePlot(JE_combined_epi, features = c("Egr1","Fosl1"),
+            cols = c("#ddf4f5", "#fa3c84"),label=T,
+            ncol=2, pt.size = 0.1)
+ggsave("./Output_Figure/JE_combined_epi_renamed_cluster_2_feature.pdf", device = "pdf", width = 15, height = 7, units = "cm")
+
+```
+
+
+```{r, krt genes feature plot split, fig.height=15, fig.width=15}
+FeaturePlot(JE_combined_epi, features = c("Egr1","Fosl1"),
+            cols = c("#ddf4f5", "#fa3c84"), label = T,
+            ncol=2, pt.size = 0.1,split.by = "orig.ident")
+ggsave("./Output_Figure/JE_combined_epi_renamed_cluster_2_feature_split.pdf", device = "pdf", width = 20, height = 10, units = "cm")
+
+```
+cluster 4
+```{r, other genes featurePlot for cluster 1, fig.height=5, fig.width=5}
+FeaturePlot(JE_combined_epi, features = c("Odam","Cdo1"),
+            cols = c("#ddf4f5", "#fa3c84"),label=T,
+            ncol=2, pt.size = 0.1)
+ggsave("./Output_Figure/JE_combined_epi_renamed_cluster_4_feature.pdf", device = "pdf", width = 15, height = 7, units = "cm")
+
+```
+
+
+```{r, krt genes feature plot split, fig.height=15, fig.width=15}
+FeaturePlot(JE_combined_epi, features = c("Odam","Cdo1"),
+            cols = c("#ddf4f5", "#fa3c84"), label = T,
+            ncol=2, pt.size = 0.1,split.by = "orig.ident")
+ggsave("./Output_Figure/JE_combined_epi_renamed_cluster_4_feature_split.pdf", device = "pdf", width = 20, height = 10, units = "cm")
+
+```
+
+cluster 5
+```{r, other genes featurePlot for cluster 5, fig.height=5, fig.width=10}
+FeaturePlot(JE_combined_epi, features = c("S100a8","S100a9"),
+            cols = c("#ddf4f5", "#fa3c84"),label=T,
+            ncol=2, pt.size = 0.1)
+ggsave("./Output_Figure/JE_combined_epi_renamed_cluster_5_feature.pdf", device = "pdf", width = 15, height = 7, units = "cm")
+
+```
+
+
+```{r,  feature plot split for cluster 5, fig.height=15, fig.width=15}
+FeaturePlot(JE_combined_epi, features = c("S100a8","S100a9"),
+            cols = c("#ddf4f5", "#fa3c84"), label = T,
+            ncol=2, pt.size = 0.1,split.by = "orig.ident")
+ggsave("./Output_Figure/JE_combined_epi_renamed_cluster_5_feature_split.pdf", device = "pdf", width = 20, height = 10, units = "cm")
+
+```
+
+
+cluster 6
+```{r, other genes featurePlot for cluster 5, fig.height=5, fig.width=10}
+FeaturePlot(JE_combined_epi, features = c("Krt6b","Krt10"),
+            cols = c("#ddf4f5", "#fa3c84"),label=T,
+            ncol=2, pt.size = 0.1)
+ggsave("./Output_Figure/JE_combined_epi_renamed_cluster_5_feature.pdf", device = "pdf", width = 15, height = 7, units = "cm")
+
+```
+
+
+```{r,  feature plot split for cluster 5, fig.height=15, fig.width=15}
+FeaturePlot(JE_combined_epi, features = c("Krt6b","Krt10"),
+            cols = c("#ddf4f5", "#fa3c84"), label = T,
+            ncol=2, pt.size = 0.1,split.by = "orig.ident")
+ggsave("./Output_Figure/JE_combined_epi_renamed_cluster_5_feature_split.pdf", device = "pdf", width = 20, height = 10, units = "cm")
+
+```
+
+
+
+# 4 Cellular composition analysis
+## 4.1 Check the number and percentage in each cluster
+** Remember the D3 was sampled from FIVE mice, while D0 and D5 were sampled from ONE mice.**
+```{r, pull the number of cells in each cluster from the integrated JE_epi object}
+
+## extract meta data
+md <- JE_combined_epi@meta.data %>% as.data.table 
+md  ## the resulting md object has one "row" per cell
+
+## count the number of cells per unique combinations of "orig.ident" and "celltype"
+md[, .N, by = c("orig.ident", "celltype")]
+
+
+## with additional casting after the counting
+split_count <- md[, .N, by = c("orig.ident", "celltype")] %>% dcast(., orig.ident ~ celltype, value.var = "N")
+split_count
+
+split_count_melt <- melt(split_count,
+                         id.vars ="orig.ident",
+                         variable.name = "celltype",
+                         value.name = "Number")
+split_count_melt
+
+split_count_melt[split_count_melt$orig.ident=="D3",3] <-round(split_count_melt[split_count_melt$orig.ident=="D3",3] /5) # remember we sampled gingival tissues from 6 mice on D3
+split_count_melt[split_count_melt$orig.ident=="D3",3]
+split_count_melt
+write.csv(split_count_melt, file = "./Output_Table/JE_combined_epi_harmony_cell_number_renamed_cluster.csv", row.names = FALSE)
+## Generate a stack-bar plot (refer to "https://www.geeksforgeeks.org/grouped-stacked-and-percent-stacked-barplot-in-ggplot2/")
+as.factor(split_count_melt$celltype)
+ggplot(split_count_melt, aes(fill = orig.ident,x=celltype,y=Number))+
+geom_bar(position = "fill", stat = "identity")+
+ggtitle("Percentage of cells in each celltype")+
+  xlab("celltype")+
+  ylab("Percentage of cells")
+theme(plot.title = element_text(hjust = 0.5))
+ggsave("./Output_Figure/JE_combined_epi_harmony_Percentage_cell_in_each_cluster_unnormalized_renamed_cluster.pdf", height = 3, width = 7.5)
+
+ggplot(split_count_melt, aes(x = celltype, y =Number)) +
+  geom_col(aes(fill = orig.ident), color = "black") + theme_bw()+ theme(panel.grid = element_blank())
+ggsave("./Output_Figure/JE_combined_harmony_Percentage_cell_in_each_celltype_unnormalized_stack_renamed_cluster.pdf", height = 3, width = 7.5)
+
+ggplot(split_count_melt, aes(x = celltype, y =Number)) +
+  geom_col(aes(fill = orig.ident), color = "black", position = "dodge") + theme_bw()+ theme(panel.grid = element_blank())
+ggsave("./Output_Figure/JE_combined_epi_harmony_Percentage_cell_in_each_celltype_unnormalized_dodge_renamed_cluster.pdf", height = 3, width = 7.5)
+
+```
+
+## 4.2 Normalize compaosition
+```{r, normalized to total number in each cluster}
+##Percent count
+
+split_count$total <-apply(split_count[,c(2:9)], 1, sum)
+split_count_noname <- split_count[,-1]
+
+split_count_mut <- mutate_all(split_count_noname, funs("percent" = ./split_count$total*100))
+split_count_mut_2 <- cbind(split_count[,1],split_count_mut)
+split_count_mut_3 <- split_count_mut_2[,-c(2:11,21)]
+colnames(split_count_mut_3) <- gsub("_percent", "",colnames(split_count_mut_3))
+split_count_mut_3
+split_count_mut_melt <- melt(split_count_mut_3,
+                         id.vars ="orig.ident",
+                         variable.name = "celltype",
+                         value.name = "Percentage")
+split_count_mut_melt
+write.csv(split_count_mut_melt, file = "./Output_Table/JE_combined_epi_harmony_cell_percentage_renamed_cluster.csv", row.names = FALSE)
+## Generate a stack-bar plot for percentage of cells
+as.factor(split_count_mut_melt$celltype)
+ggplot(split_count_mut_melt, aes(fill = orig.ident,x=celltype,y=Percentage))+
+geom_bar(position = "fill", stat = "identity")+
+ggtitle("Percentage of cells in each celltype")+
+  xlab("celltype")+
+  ylab("Percentage of cells")
+theme(plot.title = element_text(hjust = 0.5))
+ggsave("./Output_Figure/JE_combined_epi_harmony_Percentage_cell_in_each_cluster_normalized_renamed_cluster.pdf", height = 3, width = 7.5)
+
+ggplot(split_count_mut_melt, aes(x = celltype, y =Percentage)) +
+  geom_col(aes(fill = orig.ident), color = "black") + theme_bw()+ theme(panel.grid = element_blank())
+ggsave("./Output_Figure/JE_combined_epi_harmony_Percentage_cell_in_each_celltype_normalized_stack_renamed_cluster.pdf", height = 3, width = 7.5)
+
+ggplot(split_count_mut_melt, aes(x = celltype, y =Percentage)) +
+  geom_col(aes(fill = orig.ident), color = "black", position = "dodge") + theme_bw()+ theme(panel.grid = element_blank())
+ggsave("./Output_Figure/JE_combined_epi_harmony_Percentage_cell_in_each_celltype_normalized_dodge_renamed_cluster.pdf", height = 3, width = 7.5)
+
+```
+
+
+# 5 scVelo
+Here we will generate input for python-based scVelo analysis
+## 5.0 Load packages and datasets
+```{r,Load packages and datasets 5}
+gc()
+rm(list=ls())
+library(Seurat)
+library(SeuratWrappers)
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(ggpointdensity)
+library(magrittr)
+library(velocyto.R)
+library(dplyr)
+library(tidyverse)
+library(cowplot)
+library(gridExtra)
+
+set.seed(12)
+theme_set(theme_bw())
+
+JE_combined_epi <- readRDS(file = "./SeuratObject/JE_combined_epi_harmony_20221128.rds")
+
+```
+
+## 5.1 Loom files input
+```{r, load loom files}
+D0_loom<-read.loom.matrices("./loom/D0.loom") #./loom/ is a folder where you keep your loom file generated from velocyto
+D3_loom<-read.loom.matrices("./loom/D3.loom") #./loom/ is a folder where you keep your loom file generated from velocyto
+D5_loom<-read.loom.matrices("./loom/D5.loom") #./loom/ is a folder where you keep your loom file generated from velocyto
+
+D0_loom <-as.Seurat(D0_loom) # Convert loom into a Seurat Object
+D3_loom <-as.Seurat(D3_loom) # Convert loom into a Seurat Object
+D5_loom <-as.Seurat(D5_loom) # Convert loom into a Seurat Object
+```
+
+The sequencing company will generate a loom file for us, but their prefix for each sample is not always the same as ours. 
+We need to check the prefixes for loom and Seurat object accordingly.
+
+```{r, check cell barcodes of Seurat object}
+table(JE_combined_epi@meta.data$orig.ident) # D0   D3   D5  4557 1077 1483 
+JE_combined_epi@meta.data[1:3,1:3] #cell barcode started with "D0_", "D3_", "D5_" and ended with "-1"
+```
+```{r, check cell barcodes for loom objects}
+D0_loom@assays[["spliced"]][1:3,1:3] #cell barcode started with "0d:" and ended with "x"
+D3_loom@assays[["spliced"]][1:3,1:3] #cell barcode started with "W:" and ended with "x"
+D5_loom@assays[["spliced"]][1:3,1:3] #cell barcode started with "5d:" and ended with "x"
+```
+
+
+```{r, generate spliced and unsplice matrix}
+bm <- merge(x = D0_loom, y = c(D3_loom,D5_loom), merge.data = TRUE)
+spliced <- CreateAssayObject(GetAssayData(bm, assay = "spliced"))
+unspliced <- CreateAssayObject(GetAssayData(bm, assay = "unspliced"))
+ambiguous <- CreateAssayObject(GetAssayData(bm, assay = "ambiguous"))
+
+```
+
+Thus, the merged object will have three kinds of barcode initials "0d:", "W:" and "5d:", all of the barcodes end with "x".
+
+
+
+## 5.2 Generate (un)spliced count matrix for scVelo
+
+```{r, alter count matrix ID}
+spliced@counts[1:3,1:3]
+spliced_cells <- as.data.frame(spliced@counts)
+spliced_cells[1:3,1:3]
+head(colnames(spliced_cells))
+colnames(spliced_cells) <- gsub("x", "-1", colnames(spliced_cells))
+spliced_cells[1:3,1:3]
+
+colnames(spliced_cells) <- gsub("0d:", "D0_", colnames(spliced_cells))
+spliced_cells[1:3,1:3]
+
+colnames(spliced_cells) <- gsub("5d:", "D5_", colnames(spliced_cells))
+spliced_cells[1:3,1:3]
+
+colnames(spliced_cells) <- gsub("W:", "D3_", colnames(spliced_cells))
+spliced_cells[1:3,1:3]
+
+```
+
+
+```{r, work with count matrix of unspliced}
+unspliced@counts[1:3,1:3]
+unspliced_cells <- as.data.frame(unspliced@counts)
+unspliced_cells[1:3,1:3]
+head(colnames(unspliced_cells))
+colnames(unspliced_cells) <- gsub("x", "-1", colnames(unspliced_cells))
+unspliced_cells[1:3,1:3]
+
+colnames(unspliced_cells) <- gsub("0d:", "D0_", colnames(unspliced_cells))
+unspliced_cells[1:3,1:3]
+
+colnames(unspliced_cells) <- gsub("5d:", "D5_", colnames(unspliced_cells))
+unspliced_cells[1:3,1:3]
+
+colnames(unspliced_cells) <- gsub("W:", "D3_", colnames(unspliced_cells))
+unspliced_cells[1:3,1:3]
+
+```
+
+```{r,generate count matrix for scvelo}
+# Export count matrix
+write.csv(x = t(as.matrix(spliced_cells)), file = './scVeloInput/JE_combined_epi_spliced.csv')
+write.csv(x = t(as.matrix(unspliced_cells)), file = './scVeloInput/JE_combined_epi_unspliced.csv')
+```
+The above two matrics will be further merged into one AnnData in SCANPY, with two layers.
+
+## 5.2 Cell attribute matrix 
+```{r, prepare parameter matrix of combined JE for scvelo}
+# Export filtered cell ID
+JE_combined_epi_cells <- as.data.frame(Cells(JE_combined_epi))
+head(JE_combined_epi_cells)
+write.csv(JE_combined_epi_cells, file = "./scVeloInput/JE_combined_epi_cellID_obs.csv",row.names = FALSE)
+
+# Export umap coordinates
+umap_JE_combined_epi <- Embeddings(JE_combined_epi, reduction = "umap")
+head(JE_combined_epi)
+umap_JE_combined_epi[1:3,1:2]
+write.csv(umap_JE_combined_epi, file = "./scVeloInput/JE_combined_epi_cell_embeddings.csv",row.names = TRUE)
+
+# Export cluster information
+## Here we used cluster information but not celltype information. If you are interested in celltype information, you can go for it accordingly.
+head(JE_combined_epi@meta.data$SCT_snn_res.0.4) #
+cluster_head <-JE_combined_epi@meta.data$SCT_snn_res.0.4 # Optional
+cluster_info <- cbind(JE_combined_epi_cells$`Cells(JE_combined_epi)`, cluster_head)
+colnames(cluster_info) <- c("Unnamed", "seurat_cluster") #if you are working with celltype, change `seurat_cluster` into `celltype` accordingly.
+write.csv(cluster_info, file = "./scVeloInput/JE_combined_epi_clusters.csv",row.names = FALSE)
+```
+## 5.3 Cell attributes for different orig ident
+```{r, split by origin}
+JE_combined_epi_list <- SplitObject(JE_combined_epi, split.by = "orig.ident")
+
+
+D0 <-JE_combined_epi_list[["D0"]]
+
+D3 <-JE_combined_epi_list[["D3"]]
+
+D5 <-JE_combined_epi_list[["D5"]]
+
+
+
+```
+ 
+ 
+ 
+```{r, prepare parameter matrix of combined JE_D0 for scvelo}
+# Export filtered cell ID
+D0_cells <- as.data.frame(Cells(D0))
+head(D0_cells)
+write.csv(D0_cells, file = "./scVeloInput/D0_epi_cellID_obs.csv",row.names = FALSE)
+
+# Export umap coordinates
+umap_D0 <- Embeddings(D0, reduction = "umap")
+head(D0)
+umap_D0[1:3,1:2]
+write.csv(umap_D0, file = "./scVeloInput/D0_epi_cell_embeddings.csv",row.names = TRUE)
+
+# Export cluster information
+head(D0@meta.data$SCT_snn_res.0.4)
+cluster_head <-D0@meta.data$SCT_snn_res.0.4 # Optional
+cluster_info <- cbind(D0_cells$`Cells(D0)`, cluster_head)
+colnames(cluster_info) <- c("Unnamed", "seurat_cluster")
+write.csv(cluster_info, file = "./scVeloInput/D0_epi_clusters.csv",row.names = FALSE)
+```
+
+
+```{r, prepare parameter matrix of combined JE_D3 for scvelo}
+# Export filtered cell ID
+D3_cells <- as.data.frame(Cells(D3))
+head(D3_cells)
+write.csv(D3_cells, file = "./scVeloInput/D3_epi_cellID_obs.csv",row.names = FALSE)
+
+# Export umap coordinates
+umap_D3 <- Embeddings(D3, reduction = "umap")
+head(D3)
+umap_D3[1:3,1:2]
+write.csv(umap_D3, file = "./scVeloInput/D3_epi_cell_embeddings.csv",row.names = TRUE)
+
+# Export cluster information
+head(D3@meta.data$SCT_snn_res.0.4)
+cluster_head <-D3@meta.data$SCT_snn_res.0.4 # Optional
+cluster_info <- cbind(D3_cells$`Cells(D3)`, cluster_head)
+colnames(cluster_info) <- c("Unnamed", "seurat_cluster")
+write.csv(cluster_info, file = "./scVeloInput/D3_epi_clusters.csv",row.names = FALSE)
+```
+
+
+```{r, prepare parameter matrix of combined JE_D5 for scvelo}
+# Export filtered cell ID
+D5_cells <- as.data.frame(Cells(D5))
+head(D5_cells)
+write.csv(D5_cells, file = "./scVeloInput/D5_epi_cellID_obs.csv",row.names = FALSE)
+
+# Export umap coordinates
+umap_D5 <- Embeddings(D5, reduction = "umap")
+head(D5)
+umap_D5[1:3,1:2]
+write.csv(umap_D5, file = "./scVeloInput/D5_epi_cell_embeddings.csv",row.names = TRUE)
+
+# Export cluster information
+head(D5@meta.data$SCT_snn_res.0.4)
+cluster_head <-D5@meta.data$SCT_snn_res.0.4 # Optional
+cluster_info <- cbind(D5_cells$`Cells(D5)`, cluster_head)
+colnames(cluster_info) <- c("Unnamed", "seurat_cluster")
+write.csv(cluster_info, file = "./scVeloInput/D5_epi_clusters.csv",row.names = FALSE)
+```
+
+
+
+#6 Velocyto R
+## 6.0 Load packages and datasets
+```{r,Load packages and datasets 6}
+gc()
+rm(list=ls())
+library(Seurat)
+library(SeuratWrappers)
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(ggpointdensity)
+library(magrittr)
+library(velocyto.R)
+library(dplyr)
+library(tidyverse)
+library(cowplot)
+library(gridExtra)
+
+set.seed(12)
+theme_set(theme_bw())
+
+JE_combined_epi <- readRDS(file = "./SeuratObject/JE_combined_epi_harmony_20221128.rds")
+
+```
+
+## 6.1 Loom files input
+```{r, load loom files}
+D0_loom<-read.loom.matrices("./loom/D0.loom") #./loom/ is a folder where you keep your loom file generated from velocyto
+D3_loom<-read.loom.matrices("./loom/D3.loom") #./loom/ is a folder where you keep your loom file generated from velocyto
+D5_loom<-read.loom.matrices("./loom/D5.loom") #./loom/ is a folder where you keep your loom file generated from velocyto
+
+D0_loom <-as.Seurat(D0_loom) # Convert loom into a Seurat Object
+D3_loom <-as.Seurat(D3_loom) # Convert loom into a Seurat Object
+D5_loom <-as.Seurat(D5_loom) # Convert loom into a Seurat Object
+```
+
+The sequencing company will generate a loom file for us, but their prefix for each sample is not always the same as ours. 
+We need to check the prefixes for loom and Seurat object accordingly.
+
+```{r, check cell barcodes of Seurat object}
+table(JE_combined_epi@meta.data$orig.ident) # D0   D3   D5  4557 1077 1483 
+JE_combined_epi@meta.data[1:3,1:3] #cell barcode started with "D0_", "D3_", "D5_" and ended with "-1"
+```
+```{r, check cell barcodes for loom objects}
+D0_loom@assays[["spliced"]][1:3,1:3] #cell barcode started with "0d:" and ended with "x"
+D3_loom@assays[["spliced"]][1:3,1:3] #cell barcode started with "W:" and ended with "x"
+D5_loom@assays[["spliced"]][1:3,1:3] #cell barcode started with "5d:" and ended with "x"
+```
+
+
+```{r, generate spliced and unsplice matrix}
+bm <- merge(x = D0_loom, y = c(D3_loom,D5_loom), merge.data = TRUE)
+```
+
+Thus, the merged object will have three kinds of barcode initials "0d:", "W:" and "5d:", all of the barcodes end with "x".
+
+
+
+## 6.2 Generate (un)spliced count matrix for velocytoR
+
+```{r, alter count matrix ID}
+bm@assays[["spliced"]]@counts[1:3,1:3]
+
+colnames(bm@assays[["spliced"]]@counts) <- gsub("x", "-1", colnames(bm@assays[["spliced"]]@counts))
+spliced@counts[1:3,1:3]
+
+colnames(bm@assays[["spliced"]]@counts) <- gsub("0d:", "D0_", colnames(bm@assays[["spliced"]]@counts))
+bm@assays[["spliced"]]@counts[1:3,1:3]
+
+colnames(bm@assays[["spliced"]]@counts) <- gsub("5d:", "D5_", colnames(bm@assays[["spliced"]]@counts))
+bm@assays[["spliced"]]@counts[1:3,1:3]
+
+colnames(bm@assays[["spliced"]]@counts) <- gsub("W:", "D3_", colnames(bm@assays[["spliced"]]@counts))
+bm@assays[["spliced"]]@counts[1:3,1:3]
+
+```
+
+
+```{r, work with count matrix of unspliced}
+bm@assays[["unspliced"]]@counts[1:3,1:3]
+
+colnames(bm@assays[["unspliced"]]@counts) <- gsub("x", "-1", colnames(bm@assays[["unspliced"]]@counts))
+bm@assays[["unspliced"]]@counts[1:3,1:3]
+
+colnames(bm@assays[["unspliced"]]@counts) <- gsub("0d:", "D0_", colnames(bm@assays[["unspliced"]]@counts))
+bm@assays[["unspliced"]]@counts[1:3,1:3]
+
+colnames(bm@assays[["unspliced"]]@counts) <- gsub("5d:", "D5_", colnames(bm@assays[["unspliced"]]@counts))
+bm@assays[["unspliced"]]@counts[1:3,1:3]
+
+colnames(bm@assays[["unspliced"]]@counts) <- gsub("W:", "D3_", colnames(bm@assays[["unspliced"]]@counts))
+bm@assays[["unspliced"]]@counts[1:3,1:3]
+
+```
+
+```{r, work with count matrix of ambiguous}
+bm@assays[["ambiguous"]]@counts[1:3,1:3]
+
+colnames(bm@assays[["ambiguous"]]@counts) <- gsub("x", "-1", colnames(bm@assays[["ambiguous"]]@counts))
+bm@assays[["ambiguous"]]@counts[1:3,1:3]
+
+colnames(bm@assays[["ambiguous"]]@counts) <- gsub("0d:", "D0_", colnames(bm@assays[["ambiguous"]]@counts))
+bm@assays[["ambiguous"]]@counts[1:3,1:3]
+
+colnames(bm@assays[["ambiguous"]]@counts) <- gsub("5d:", "D5_", colnames(bm@assays[["ambiguous"]]@counts))
+bm@assays[["ambiguous"]]@counts[1:3,1:3]
+
+colnames(bm@assays[["ambiguous"]]@counts) <- gsub("W:", "D3_", colnames(bm@assays[["ambiguous"]]@counts))
+bm@assays[["ambiguous"]]@counts[1:3,1:3]
+
+```
+
+
+
+## 6.3 Calculate RNA velocity
+### 6.3.1 Data intersection
+```{r}
+bm@assays[["unspliced"]]@counts<-bm@assays[["unspliced"]]@counts[,rownames(JE_combined_epi@meta.data)]
+bm@assays[["ambiguous"]]@counts<-bm@assays[["ambiguous"]]@counts[,rownames(JE_combined_epi@meta.data)]
+sf <- bm@assays[["spliced"]]@counts
+uf <- bm@assays[["unspliced"]]@counts
+bm_umap <- JE_combined_epi@reductions$umap@cell.embeddings
+```
+
+
+
+### 6.3.2 Calculate distance
+```{r}
+cell.dist <- as.dist(1-armaCor(t(JE_combined_epi@reductions$umap@cell.embeddings)))
+fit.quantile <- 0.02
+#rvel.cd.1 <- gene.relative.velocity.estimates(sf,uf,deltaT=1,kCells=30, cell.dist=cell.dist,fit.quantile=fit.quantile,n.cores=10)
+#rvel.cd.2 <- gene.relative.velocity.estimates(sf,uf,deltaT=1,kCells=10, cell.dist=cell.dist,fit.quantile=fit.quantile,n.cores=10)
+#rvel.cd.3 <- gene.relative.velocity.estimates(sf,uf,deltaT=2,kCells=30, cell.dist=cell.dist,fit.quantile=fit.quantile,n.cores=10)
+#rvel.cd.4 <- gene.relative.velocity.estimates(sf,uf,deltaT=2,kCells=10, cell.dist=cell.dist,fit.quantile=fit.quantile,n.cores=10)
+#rvel.cd.5 <- gene.relative.velocity.estimates(sf,uf,deltaT=3,kCells=30, cell.dist=cell.dist,fit.quantile=fit.quantile,n.cores=10)
+rvel.cd.6 <- gene.relative.velocity.estimates(sf,uf,deltaT=3,kCells=10, cell.dist=cell.dist,fit.quantile=fit.quantile,n.cores=10) # this made the most significant trend
+```
+
+### 6.3.3 Plot velocity
+```{r, velocity on umap for wt}
+
+#pdf("cell_velocity_JE_combined_epi_test_run.6.pdf",height=6,width=8)
+gg <- UMAPPlot(JE_combined_epi)
+head(ggplot_build(gg)$data)
+colors <- as.list(ggplot_build(gg)$data[[1]]$colour)
+names(colors) <- rownames(bm_umap)
+
+p1 <- show.velocity.on.embedding.cor(bm_umap,
+                                     rvel.cd.6, #for rvel.cd.6
+                                     n=30,scale='sqrt',
+                                     cell.colors=ac(colors,alpha=0.5),
+                                     cex=0.8,arrow.scale=2,
+                                     show.grid.flow=T,
+                                     min.grid.cell.mass=1.0,grid.n=50,arrow.lwd=1,do.par=F,cell.border.alpha =0.1,USE_OPENMP=1,n.cores=24,
+                                     main="Cell Velocity")
+#dev.off()
+
+```
+
+### 6.3.4 Velocity for gene of interest
+Pick the top two enriched genes in cluster 2
+```{r}
+top10 <- read.csv(file = "./OutputTable/JE_combined_epi_top10_markers_20221128.csv")
+JE_combined_epi_c2_top10 <- subset(top10, #top10 was a table generated in 3.1 Marker genes identification
+                                   top10$cluster==2)
+JE_combined_epi_c2_top10_genes<-JE_combined_epi_c2_top10[["gene"]]
+JE_combined_epi_c2_top10_genes[1:2]
+```
+
+```{r}
+cc<-gene.relative.velocity.estimates(sf,uf,
+                                 kCells = 30,
+                                 fit.quantile = fit.quantile,
+                                 old.fit = rvel.cd.6,
+                                 show.gene = JE_combined_epi_c2_top10_genes[1],# replace with you own
+                                 cell.emb = bm_umap,
+                                 cell.colors=ac(colors,alpha=0.5))
+```
+
+
+```{r}
+cc<-gene.relative.velocity.estimates(sf,uf,
+                                 kCells = 30,
+                                 fit.quantile = fit.quantile,
+                                 old.fit = rvel.cd.6,
+                                 show.gene = JE_combined_epi_c2_top10_genes[2],
+                                 cell.emb = bm_umap,
+                                 cell.colors=ac(colors,alpha=0.5))
+```
+

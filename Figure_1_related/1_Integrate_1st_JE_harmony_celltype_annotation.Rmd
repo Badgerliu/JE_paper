@@ -1,0 +1,1242 @@
+---
+title: "1st round Mouse JE repair scRNA integration and celltype annotation"
+author: "Huan"
+date: "11/22/2022"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  tidy = TRUE,
+  eval = FALSE,
+  tidy.opts = list(width.cutoff = 120),
+  message = TRUE,
+  warning = FALSE,
+  cache = TRUE,
+  label.duplicate = "append"
+)
+
+```
+
+This note was used for Seurat Objects integration and celltype annotation for 1st round of JE repair scRNA-seq profile.
+
+
+# 1 Setup of analysis environment
+## 1.1 Package installation 
+Seurat (v3), harmony,ggplot2,magrittr and sctransform packages were installed.
+
+## 1.2 Load environment and packages
+```{r load of packages and setup of the environment 1}
+gc()
+rm(list=ls())
+library(Seurat)
+library(SeuratWrappers)
+library(sctransform)
+library(harmony)
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(ggpointdensity)
+library(monocle3)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(cowplot)
+library(clustree)
+library(gridExtra)
+set.seed(12)
+theme_set(theme_bw())
+```
+
+
+## 1.3 Load data raw Seurat objects
+```{r, load 10X datasets}
+D5 <- readRDS("./SeuratObject/JE_D5_raw.rds")
+D3 <- readRDS("./SeuratObject/JE_D3_raw.rds")
+D0 <- readRDS("./SeuratObject/JE_D0_raw.rds")
+```
+
+## 1.4 Filter and combine Seurat Objects
+```{r, filter data by gene counts and mitochondria percentage}
+D0 <- PercentageFeatureSet(D0, pattern = "^mt-", col.name = "percent.mt")
+D0 <- subset(D0, subset = nFeature_RNA > 500 & nFeature_RNA < 7500  &percent.mt < 25)
+
+D3 <- PercentageFeatureSet(D3, pattern = "^mt-", col.name = "percent.mt")
+D3 <- subset(D3, subset = nFeature_RNA > 500 & nFeature_RNA < 7500  &percent.mt < 25)
+
+D5 <- PercentageFeatureSet(D5, pattern = "^mt-", col.name = "percent.mt")
+D5 <- subset(D5, subset = nFeature_RNA > 500 & nFeature_RNA < 7500  &percent.mt < 25)
+
+
+```
+
+
+```{r, save filtered Seurat object}
+saveRDS(D5, file="./SeuratObject/JE_D5_filter.rds")
+saveRDS(D3, file="./SeuratObject/JE_D3_filter.rds")
+saveRDS(D0, file="./SeuratObject/JE_D0_filter.rds")
+```
+
+```{r, combine}
+JE_combined <- merge(D0, y=c(D3,D5), add.cell.ids = c("D0","D3","D5"), project = "JE_combined")
+```
+
+```{r,check data structure again}
+JE_combined  #18976 features across 13573 samples within 1 assay 
+table(JE_combined@meta.data$orig.ident) 
+```
+
+
+```{r, save combined data}
+saveRDS(JE_combined, file="./SeuratObject/JE_combined.rds")
+```
+
+## 1.5 Integration by Harmony
+```{r, scale, normalzation and integration}
+JE_combined.list <- SplitObject(object = JE_combined, split.by = "orig.ident")
+for (i in 1:length(JE_combined.list)) {
+    JE_combined.list[[i]] <- SCTransform(JE_combined.list[[i]], verbose = FALSE)
+} #I'm not sure if the split and merge is necessary, but it won't cause trouble
+```
+
+
+Following the discussion in `https://github.com/immunogenomics/harmony/issues/41`
+```{r, select integration feature for the merged dataset}
+JE_combined.features <- SelectIntegrationFeatures(object.list = JE_combined.list, nfeatures = 3000)
+JE_combined <- merge(JE_combined.list[[1]],
+                   y = JE_combined.list[2:length(JE_combined.list)],  
+                   project = "JE_combined", 
+                   merge.data = TRUE)
+VariableFeatures(JE_combined) <- JE_combined.features
+```
+
+
+PCA using SCT features
+```{r,PCA using SCT features}
+JE_combined <- RunPCA(object = JE_combined, assay = "SCT", npcs = 50)
+```
+
+```{r, integration and batch effect removal using hamony}
+system.time({
+    JE_combined <- RunHarmony(object = JE_combined, 
+                            assay.use = "SCT",
+                            reduction = "pca",
+                            dims.use = 1:50,
+                            group.by.vars = "orig.ident",
+                            plot_convergence = TRUE)
+})
+```
+
+
+## 1.6 Dimension reduction
+*You may probe dims and resolution in details*
+```{r, dimension reduction}
+JE_combined <- RunUMAP(object = JE_combined, assay = "SCT", reduction = "harmony", dims = 1:50) #You may probe dims in details
+JE_combined <- FindNeighbors(object = JE_combined, assay = "SCT", reduction = "harmony", dims = 1:50) #You may probe dims in details
+```
+*For details of probing resolution, refer to `https://cloud.tencent.com/developer/article/1825681`. *
+Here we will set an intermediate seurat object innheriting all the metadata from the formal object.
+```{r, probing resolution parameter}
+
+JE_combined.resolution <- FindClusters(JE_combined,dims=1:50,graph.name = "RNA_snn", resolution = seq(from=0,by=.2,length=10))
+
+```
+
+```{r, fig.height=10, fig.width=10}
+clustree(JE_combined.resolution)
+```
+*Choosing resolution is quite arbitrary and no conclusion has been attained before biological validation*
+The `suture.resolution` object has many choice for resultion, such as SCT_snn_res.0.8. You may want to plot and check. Here are some examples:
+```{r, probeing resolution}
+DimPlot(JE_combined.resolution, reduction = "umap", label = T, group.by = "SCT_snn_res.0.2")
+DimPlot(JE_combined.resolution, reduction = "umap", label = T, group.by = "SCT_snn_res.0.4")
+DimPlot(JE_combined.resolution, reduction = "umap", label = T, group.by = "SCT_snn_res.0.6")
+DimPlot(JE_combined.resolution, reduction = "umap", label = T, group.by = "SCT_snn_res.0.8")
+
+```
+
+From the above plots, we chose the finest resolution for furhter annotation and celltype combination.
+
+```{r, cluster with a suitable resolution}
+JE_combined <- FindClusters(object = JE_combined, resolution = 0.4) #You may probe resolution in details
+```
+
+```{r, test plot 1,fig.height=5, fig.width=8}
+plots <- DimPlot(JE_combined, group.by = c("orig.ident", "seurat_clusters"), combine = FALSE, pt.size = .2)
+plots <- lapply(X = plots, FUN = function(x) x + theme(legend.position = "top") + guides(color = guide_legend(nrow = 5, 
+    byrow = TRUE, override.aes = list(size = 4))))
+CombinePlots(plots)
+```
+
+## 1.7 Initial plots 
+After the clustering, we are eager to see the topological relationship between different clusters.
+```{r, initial plots}
+#group_by_cluster
+plot1 = DimPlot(JE_combined, reduction = "umap", label = T)
+# group_by_sample
+plot2 = DimPlot(JE_combined, reduction = "umap", group.by = "orig.ident")
+plot3 = DimPlot(JE_combined, reduction = "umap", split.by  = "orig.ident")
+# combine
+plotc <- plot1 + plot2
+ggsave("./OutputFigure/JE_combined_umap.png", plot = plotc, width = 10, height = 5)
+plot3
+ggsave("./OutputFigure/JE_combined_umap_split.png", plot = plot3, width = 12, height = 5) # You may set the parameters, especially the "width". Usually each plot will take about 5.5 unit.
+
+DimPlot(JE_combined, reduction = "umap", label = T)
+DimPlot(JE_combined, reduction = "umap", group.by = "orig.ident")
+
+```
+
+
+## 1.8 Save object
+```{r, output integrated data}
+saveRDS(JE_combined, file = "./SeuratObject/JE_combined_harmony_20221128.rds")
+```
+
+For replication of the work, I split and saved object depending on orig.idents.
+
+```{r, object split by time points and saved }
+JE_combined_list <- SplitObject(JE_combined, split.by = "orig.ident")
+D0 <-JE_combined_list[["D0"]]
+saveRDS(D0, file = "./SeuratObject/JE_combined_harmony_D0_20221128.rds")
+D3 <-JE_combined_list[["D3"]]
+saveRDS(D3, file = "./SeuratObject/JE_combined_harmony_D3_20221128.rds")
+D5 <-JE_combined_list[["D5"]]
+saveRDS(D5, file = "./SeuratObject/JJE_combined_harmony_D5_20221128.rds")
+```
+
+
+# 2  Marker genes and Cell type assignment
+## 2.0 Load Package and Data
+
+```{r, load package 2}
+gc()
+rm(list=ls())
+library(Seurat)
+library(SeuratWrappers)
+library(sctransform)
+library(harmony)
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(ggpointdensity)
+library(monocle3)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(cowplot)
+library(clustree)
+library(gridExtra)
+set.seed(12)
+theme_set(theme_bw())
+
+JE_combined <- readRDS(file = "./SeuratObject/JE_combined_harmony_20221128.rds")
+```
+
+
+
+## 2.1 Marker genes identification
+Identification of marker genes
+refer to `https://github.com/satijalab/seurat/issues/2115` Perform DE using RNA rather than SCT
+
+```{r, generally find marker genes}
+Idents(JE_combined) <- JE_combined$seurat_clusters
+DefaultAssay(JE_combined) <- "RNA"
+JE_combined <- NormalizeData(JE_combined)
+all.genes <- rownames(JE_combined)
+JE_combined <- ScaleData(JE_combined, features = all.genes)
+JE_combined_markers <- FindAllMarkers(object = JE_combined, only.pos = TRUE, 
+                               min.pct = 0.25, thresh.use = 0.25) #identify positive marker genes 
+top10 <- JE_combined_markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC) # You may change n=10 to other number to get top_n genes as you wish.
+```
+
+```{r, output tables for marker genes}
+write.csv(JE_combined_markers, file = "./OutputTable/JE_combined_markers_20221128.csv", row.names = FALSE)
+write.csv(top10, file = "./OutputTable/JE_combined_top10_markers_20221128.csv", row.names = FALSE)
+
+
+```
+
+Plot heatmap for marker genes
+```{r, heatmapplot, fig.width=10, fig.height=18 }
+
+DoHeatmap(JE_combined, features = top10$gene)
+ggsave("./OutputFigure/JE_combined_markers_top10_20221128.pdf", device = "pdf",#adjust filename accordingly
+       width = 30, #adjust according to the display of output
+       height = 55, #adjust according to the display of output
+       units = "cm")
+
+```
+
+
+
+## 2.2 Association of marker genes 
+Before assigning the celltype, we want to check typical marker gene expression pattern.
+
+```{r, setup gene list}
+#markers refer to https://www.ncbi.nlm.nih.gov/pmc/articles/PMC7359078/
+genes_to_check <- c("Col1a1", "Lum","Nfia", #Dermal
+                             "Epcam","Krt14","Krt15","Krt5","Krt17","Lhx2", #Epithelium
+                             "Plp1","Fabp7", #Melanocyte
+                             "Rgs5","Acta2", #Pericyte
+                             "Pecam1","Kdr", #Endothelial
+                             "Cd52","Fcer1g","Cd86","Cd163", #immune
+                             "Myod1","Pax7", #Muscle
+                             "Map2","Stmn3" #Neural
+                             )
+```
+
+
+
+```{r, dot plot to show the distribution of marker genes in each seurat cluster}
+DotPlot(JE_combined, features = unique(genes_to_check),group.by = "seurat_clusters")+RotatedAxis()+
+  scale_x_discrete("")+scale_y_discrete("")
+#NA represent genes without detection, you NEED to adjust the name for genes of interest above, or delete genes from the list.
+```
+
+
+```{r, another version of dotplot for marker genes}
+Idents(JE_combined) <- JE_combined$seurat_clusters
+DotPlot(JE_combined, features=unique(genes_to_check))+
+  theme_bw()+
+  theme(panel.grid = element_blank(), axis.text.x = element_text(angle=45,hjust = 0.5, vjust = 0.5))+
+  labs(x=NULL, y=NULL)+ guides(size = guide_legend(order=3))+
+  scale_color_gradientn(values = seq(0,1,0.2), colours = c('#330066', '#336699','#66CC66','#FFCC33'))
+ggsave("./OutputFigure/JE_combined_dotplot_marker_genes_unordered.pdf", width = 20, height =15,units = "cm")
+```
+
+Below is a cluster version of dotplot, which may help you 'guess' and merge different clusters into a same one.
+```{r, cluster version of dotplot for marker genes, fig.width= 5, fig.height=6}
+library(FlexDotPlot)
+dp = DotPlot(JE_combined, features = unique(genes_to_check)) + RotatedAxis()
+dot_plot(dp$data[,c(3,4,1,2,5)],
+         size_var = 'pct.exp',
+         col_var = 'avg.exp.scaled',
+         size_legend = 'Percent Expressed',
+         col_legend = 'Average Expression',
+         x.lab.pos = 'bottom',
+         y.lab.pos = 'right',
+         display_max_sizes = F,
+         shape.scale = 8,
+         hclust_method = 'ward.D2',
+         dend_x_var = c('pct.exp','avg.exp.scaled'),
+         dend_y_var = c('pct.exp','avg.exp.scaled'),
+         text.size = 0.5,
+         text.vjust = 0.5,
+         size.breaks.number = 6,
+         color.breaks.number = 4,
+         x.lab.size.factor = 0.8,
+         cols.use = c('#330066','#336699','#66CC66','#FFCC33'),
+         y.lab.size.factor = 1)
+#ggsave("./OutputFigure/JE_combined_dotplot_marker_genes.png", width = 30, height =40) # this is not working, you may right click the figure and save as another png file.
+```
+
+
+
+## 2.3 Celltype annotation
+```{r, set different cluster to different cell type}
+new.cluster.ids <- c("Dermal",#0
+                     "Epithelium",#1
+                     "Epithelium",#2
+                     "Epithelium",#3
+                     "Epithelium",#4
+                     "Dermal",#5
+                     "Immune",#6
+                     "Immune", #7
+                     "Epithelium", #8
+                     "Epithelium", #9
+                     "Endothelium", #10
+                     "Immune", #11
+                     "Melanocyte", #12
+                     "Pericyte", #13
+                     "Endothelium",#14
+                     "Epithelium",#15
+                     "Immune" #16
+                     )
+
+JE_combined@meta.data$celltype<- JE_combined@meta.data$seurat_clusters
+levels(JE_combined@meta.data$celltype) <- new.cluster.ids  #celltype assignment
+```
+
+```{r,dotplot for cell types,fig.height=4, fig.width=9.5}
+DotPlot(JE_combined, features = unique(genes_to_check),group.by = "celltype")+RotatedAxis()+
+  scale_x_discrete("")+scale_y_discrete("")
+ggsave("./OutputFigure/JE_combined_harmony_dotplot.pdf",width = 9.5,height = 4)
+
+```
+
+```{r,dotplot for cell types,fig.height=4, fig.width=9.5}
+DotPlot(JE_combined, features = unique(genes_to_check),
+        cols = c("lightgrey","red"),col.min = 0, col.max = 3,
+        group.by = "celltype")+
+  RotatedAxis()+
+  scale_x_discrete("")+
+  scale_y_discrete("")
+ggsave("./OutputFigure/JE_combined_harmony_dotplot_red.pdf",width = 9.5,height = 4)
+
+
+```
+```{r, another version of dotplot for marker genes}
+Idents(JE_combined) <- JE_combined$celltype
+DotPlot(JE_combined, features=unique(genes_to_check))+
+  theme_bw()+
+  theme(panel.grid = element_blank(), axis.text.x = element_text(angle=45,hjust = 0.5, vjust = 0.5))+
+  labs(x=NULL, y=NULL)+ guides(size = guide_legend(order=3))+
+  scale_color_gradientn(values = seq(0,1,0.2), colours = c('#330066', '#336699','#66CC66','#FFCC33'))
+ggsave("./OutputFigure/JE_combined_harmony_dotplot_two_colored.pdf",width = 8,height = 3)
+```
+
+The above Dotplot looks fine, so I will go with different cell populations.
+
+```{r, save JE RDS}
+saveRDS(JE_combined, file = "./SeuratObject/JE_combined_celltype_20221128.rds")
+
+```
+
+
+```{r, cell type umap plot}
+Idents(JE_combined)<-JE_combined$celltype
+#group_by_cluster
+plot1 = DimPlot(JE_combined, reduction = "umap", label = T)
+# group_by_sample
+plot2 = DimPlot(JE_combined, reduction = "umap", group.by = "orig.ident")
+plot3 = DimPlot(JE_combined, reduction = "umap", split.by  = "orig.ident")
+# combine
+plotc <- plot1 + plot2
+plotc
+ggsave("./OutputFigure/JE_combined_celltype_umap.png", plot = plotc, width = 10, height = 5)
+plot3
+ggsave("./OutputFigure/JE_combined_celltype_umap_split.png", plot = plot3, width = 12, height = 5)
+
+DimPlot(JE_combined, reduction = "umap", label = T)
+DimPlot(JE_combined, reduction = "umap", group.by = "orig.ident")
+
+```
+
+## 2.4 Cell percentage in each celltype
+Here we restart the session, so reload the subject.
+### 2.4.1 Cell percentage calculation
+
+We are now going to calculate the cell percentage in each cell type.
+
+```{r, pull the number of cells in each celltype from the integrated JE_combined object}
+
+## extract meta data
+md <- JE_combined@meta.data %>% as.data.table 
+md  ## the resulting md object has one "row" per cell
+
+## count the number of cells per unique combinations of "orig.ident" and "celltype"
+md[, .N, by = c("orig.ident", "celltype")]
+
+
+## with additional casting after the counting
+split_count <- md[, .N, by = c("orig.ident", "celltype")] %>% dcast(., orig.ident ~ celltype, value.var = "N")
+split_count
+
+
+split_count_melt <- melt(split_count,
+                         id.vars ="orig.ident",
+                         variable.name = "celltype",
+                         value.name = "Number")
+split_count_melt
+
+split_count_melt[split_count_melt$orig.ident=="D3",3] <-round(split_count_melt[split_count_melt$orig.ident=="D3",3] /5) # remember we sampled gingival tissues from 5 mice on D3
+split_count_melt[split_count_melt$orig.ident=="D3",3]
+split_count_melt
+write.csv(split_count_melt, file = "./OutputTable/JE_combined_harmony_cell_number_celltype.csv", row.names = FALSE)
+## Generate a stack-bar plot (refer to "https://www.geeksforgeeks.org/grouped-stacked-and-percent-stacked-barplot-in-ggplot2/")
+as.factor(split_count_melt$celltype)
+ggplot(split_count_melt, aes(fill = orig.ident,x=celltype,y=Number))+
+geom_bar(position = "fill", stat = "identity")+
+ggtitle("Percentage of cells in each cluster")+
+  xlab("celltype")+
+  ylab("Percentage of cells")
+theme(plot.title = element_text(hjust = 0.5))
+ggsave("./OutputFigure/JE_combined_harmony_Percentage_cell_in_each_celltype_unnormalized.pdf", height = 3, width = 7.5)
+```
+
+```{r, normalized to total number in each celltype}
+##Percent count
+
+split_count$total <-apply(split_count[,c(2:7)], 1, sum)
+split_count_noname <- split_count[,-1]
+split_count_mut <- mutate_all(split_count_noname, funs("percent" = ./split_count$total*100))
+split_count_mut_2 <- cbind(split_count[,1],split_count_mut)
+split_count_mut_3 <- split_count_mut_2[,-c(2:8,15)]
+colnames(split_count_mut_3) <- gsub("_percent", "",colnames(split_count_mut_3))
+split_count_mut_3
+split_count_mut_melt <- melt(split_count_mut_3,
+                         id.vars ="orig.ident",
+                         variable.name = "celltype",
+                         value.name = "Percentage")
+split_count_mut_melt
+write.csv(split_count_mut_melt, file = "./OutputTable/JE_combined_harmony_cell_percentage_celltype.csv", row.names = FALSE)
+## Generate a stack-bar plot for percentage of cells
+as.factor(split_count_mut_melt$celltype)
+ggplot(split_count_mut_melt, aes(fill = orig.ident,x=celltype,y=Percentage))+
+geom_bar(position = "fill", stat = "identity")+
+ggtitle("Percentage of cells in each celltype")+
+  xlab("Celltype")+
+  ylab("Percentage of cells")
+theme(plot.title = element_text(hjust = 0.5))
+ggsave("./OutputFigure/JE_combined_harmony_Percentage_cell_in_each_celltype_normalized.pdf", height = 3, width = 7.5)
+
+ggplot(split_count_mut_melt, aes(x = celltype, y =Percentage)) +
+  geom_col(aes(fill = orig.ident), color = "black") + theme_bw()+ theme(panel.grid = element_blank())
+ggsave("./OutputFigure/JE_combined_harmony_Percentage_cell_in_each_celltype_normalized_stack.pdf", height = 3, width = 7.5)
+
+ggplot(split_count_mut_melt, aes(x = celltype, y =Percentage)) +
+  geom_col(aes(fill = orig.ident), color = "black", position = "dodge") + theme_bw()+ theme(panel.grid = element_blank())
+ggsave("./OutputFigure/JE_combined_harmony_Percentage_cell_in_each_celltype_normalized_dodge.pdf", height = 3, width = 7.5)
+
+```
+### 2.4.2 DPA analysis
+
+```{r, source functions for DPA assay}
+source("diffprop_functions.R")
+```
+
+```{r, generate the table of cell number}
+## Read in file of counts of cells in each population across conditions
+md <- JE_combined@meta.data %>% as.data.table 
+md  ## the resulting md object has one "row" per cell
+
+
+obs.counts <- md[, .N, by = c("orig.ident", "celltype")] %>% dcast(., orig.ident ~ celltype, value.var = "N")
+obs.counts <- obs.counts %>% remove_rownames %>% column_to_rownames(var="orig.ident")
+write.csv(obs.counts, file = "./OutputTable/test.csv", row.names = FALSE)
+# I edited the "test.csv" file by adding the orig.ident to the first column, and reload as below.
+
+```
+
+
+```{r, DPA}
+obs.counts = as.matrix(read.csv("./OutputTable/test.csv", row.names = 1))
+print(obs.counts)
+## Run an example using error (p) of 0.1 and with 100,000 iterations
+tip.exp <- generateNull(obs.counts, n=100000, p=0.1);     # Generate the null distribution based on sampling
+
+obs.counts/apply(obs.counts, 1, sum)
+
+### P-value tests for D3 vs D0
+two.class.test(obs.counts, tip.exp, cond.control="D0", cond.treatment="D3",to.plot=T);
+
+### P-value tests for D5 vs D0
+two.class.test(obs.counts, tip.exp, cond.control="D0", cond.treatment="D5",to.plot=T);
+
+### P-value tests for D5 vs D3
+two.class.test(obs.counts, tip.exp, cond.control="D3", cond.treatment="D5",to.plot=T);
+
+
+```
+
+
+```{r, Get a table of P-values for a range of 'p' values }
+
+res.table.D3VsD0 = c()
+res.table.D5VsD0 = c()
+res.table.D5VsD3 = c()
+
+## Go through a series of error probabilities
+for (err_prob in c(0.5, 0.4, 0.3, 0.25, 0.2, 0.15, 0.1, 0.05)) {
+  tip.exp <- generateNull(obs.counts, n=100000, p=err_prob);
+  ## Sham vs MI-day 3
+  res.1 = two.class.test(obs.counts, tip.exp, cond.control="D0", cond.treatment="D3",to.plot=F)
+  res.table.D3VsD0 = rbind(res.table.D3VsD0, res.1)
+  ## Sham vs MI-day 7
+  res.2 = two.class.test(obs.counts, tip.exp, cond.control="D0", cond.treatment="D5",to.plot=F)
+  res.table.D5VsD0 = rbind(res.table.D5VsD0, res.2)
+  ## MI-day 3 vs MI-day 7
+  res.3 = two.class.test(obs.counts, tip.exp, cond.control="D3", cond.treatment="D5",to.plot=F)
+  res.table.D5VsD3 = rbind(res.table.D5VsD3, res.3)
+}
+
+rownames(res.table.D3VsD0) = as.character(c(0.5, 0.4, 0.3, 0.25, 0.2, 0.15, 0.1, 0.05))
+rownames(res.table.D5VsD0) = as.character(c(0.5, 0.4, 0.3, 0.25, 0.2, 0.15, 0.1, 0.05))
+rownames(res.table.D5VsD3) = as.character(c(0.5, 0.4, 0.3, 0.25, 0.2, 0.15, 0.1, 0.05))
+
+
+write.csv(res.table.D3VsD0, file = "./OutputTable/JE_combined_res.table.D3VsD0.csv", row.names = FALSE)
+write.csv(res.table.D5VsD0, file = "./OutputTable/JE_combined_res.table.D5VsD0.csv", row.names = FALSE)
+write.csv(res.table.D5VsD3, file = "./OutputTable/JE_combined_res.table.D5VsD3.csv", row.names = FALSE)
+
+```
+
+
+
+
+## 2.5 Export object for different celltype
+### 2.5.1 Epithelium
+```{r, subset epi cluster by celltype}
+JE_combined_epi <- subset(JE_combined, idents="Epithelium")
+```
+
+
+
+```{r,check data structure after subset}
+JE_combined_epi
+table(JE_combined_epi@meta.data$orig.ident)
+DimPlot(JE_combined_epi, reduction = "umap", label = T)
+```
+
+```{r, export JE_epi populations}
+saveRDS(JE_combined_epi, file = "./SeuratObject/JE_combined_epi_raw_20221130.rds")
+```
+
+Also, we split epithelium object by orig.ident
+```{r, oject split and saved }
+JE_combined_epi_list <- SplitObject(JE_combined_epi, split.by = "orig.ident")
+D0 <-JE_combined_epi_list[["D0"]]
+saveRDS(D0, file = "./SeuratObject/JE_combined_epi_D0_seurat_20221130.rds")
+D3 <-JE_combined_epi_list[["D3"]]
+saveRDS(D3, file = "./SeuratObject/JE_combined_epi_D3_seurat_20221130.rds")
+D5 <-JE_combined_epi_list[["D5"]]
+saveRDS(D5, file = "./SeuratObject/JE_combined_epi_D5_seurat_20221130.rds")
+```
+### 2.5.2 Dermal population
+```{r, subset dermal cluster by celltype}
+JE_combined_dermal <- subset(JE_combined, idents="Dermal")
+
+JE_combined_dermal
+table(JE_combined_dermal@meta.data$orig.ident)
+DimPlot(JE_combined_dermal, reduction = "umap", label = T)
+```
+
+```{r, export JE_dermal populations}
+saveRDS(JE_combined_dermal, file = "./SeuratObject/JE_combined_dermal_raw_20221130.rds")
+```
+
+### 2.5.3 Immune cell population
+```{r, subset endo cluster by celltype}
+JE_combined_immu <- subset(JE_combined, idents="Immune")
+
+JE_combined_immu
+table(JE_combined_immu@meta.data$orig.ident)
+DimPlot(JE_combined_immu, reduction = "umap", label = T)
+```
+
+```{r, export JE_immu populations}
+saveRDS(JE_combined_immu, file = "./SeuratObject/JE_combined_immune_raw_20221130.rds")
+```
+
+### 2.5.4 Endothelium population
+```{r, subset dermal cluster by celltype}
+JE_combined_endo <- subset(JE_combined, idents="Endothelium")
+
+JE_combined_endo
+table(JE_combined_endo@meta.data$orig.ident)
+DimPlot(JE_combined_endo, reduction = "umap", label = T)
+```
+
+```{r, export JE_endo populations}
+saveRDS(JE_combined_endo, file = "./SeuratObject/JE_combined_endo_raw_20221130.rds")
+```
+
+### 2.5.5 Melanocyte population
+```{r, subset Melanocyte cluster by celltype}
+JE_combined_mel <- subset(JE_combined, idents="Melanocyte")
+
+JE_combined_mel
+table(JE_combined_mel@meta.data$orig.ident)
+DimPlot(JE_combined_mel, reduction = "umap", label = T)
+```
+
+```{r, export JE_combined_mel populations}
+saveRDS(JE_combined_mel, file = "./SeuratObject/JE_combined_mel_raw_20221130.rds")
+```
+
+
+### 2.5.6 Pericyte population
+```{r, subset Pericyte cluster by celltype}
+JE_combined_peri <- subset(JE_combined, idents="Pericyte")
+
+JE_combined_peri
+table(JE_combined_peri@meta.data$orig.ident)
+DimPlot(JE_combined_peri, reduction = "umap", label = T)
+```
+
+```{r, export JE_combined_peri populations}
+saveRDS(JE_combined_peri, file = "./SeuratObject/JE_combined_peri_raw_20221130.rds")
+```
+
+
+# 3 Cellchat
+## 3.1 Load package and datasets
+```{r, load package 2}
+gc()
+rm(list=ls())
+library(Seurat)
+library(SeuratWrappers)
+library(sctransform)
+library(harmony)
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(ggpointdensity)
+library(monocle3)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(cowplot)
+library(clustree)
+library(gridExtra)
+library(CellChat)
+set.seed(12)
+theme_set(theme_bw())
+
+JE_combined <- readRDS(file = "./SeuratObject/JE_combined_celltype_20221128.rds")
+```
+
+
+
+## 3.2 Multiple sample analysis preparation
+The logic of multiple sampe is to perform 1by1 comparison using the integrated data.
+### 3.2.1 Prepare individual cellchat object
+1) JE_D0 cellchat object
+```{r, preload single group data}
+D0 <- subset(JE_combined, orig.ident=='D0')
+D0_datainput <- D0[["RNA"]]@data  #Make sure you are using the normalized data
+D0_meta <- D0@meta.data  #metadata
+head(D0_meta) #check the data structure
+D0_meta <- D0_meta[,c(1,9)] #We only need group info (col1) and celltype(col10) metadata
+colnames(D0_meta) <- c("group","labels") #label
+D0_meta
+```
+
+
+```{r, Create CellChat object for single group}
+D0_cellchat <- createCellChat(object = D0_datainput, 
+                                 meta = D0_meta, 
+                                 group.by = "labels")
+```
+
+
+```{r, prepare cellchat for single group}
+D0_cellchat <- addMeta(D0_cellchat, meta = D0_meta)##add meta data
+D0_cellchat <- setIdent(D0_cellchat, ident.use = "labels") # set label as celltype
+levels(D0_cellchat@idents) #check cell type
+D0Size <- as.numeric(table(D0_cellchat@idents)) # table for cellnumber in each celltype
+D0Size
+```
+
+2) Prepare JE_D3 object
+```{r, preload single group data}
+D3 <- subset(JE_combined, orig.ident=='D3')
+D3_datainput <- D3[["RNA"]]@data  #Make sure you are using the normalized data
+D3_meta <- D3@meta.data  #metadata
+head(D3_meta) #check the data structure
+D3_meta <- D3_meta[,c(1,9)] #We only need group info (col1) and celltype(col10) metadata
+colnames(D3_meta) <- c("group","labels") #label
+D3_meta
+```
+
+
+```{r, Create CellChat object for single group}
+D3_cellchat <- createCellChat(object = D3_datainput, 
+                                 meta = D3_meta, 
+                                 group.by = "labels")
+```
+
+
+```{r, prepare cellchat for single group}
+D3_cellchat <- addMeta(D3_cellchat, meta = D3_meta)##add meta data
+D3_cellchat <- setIdent(D3_cellchat, ident.use = "labels") # set label as celltype
+levels(D3_cellchat@idents) #check cell type
+D3Size <- as.numeric(table(D3_cellchat@idents)) # table for cellnumber in each celltype
+D3Size
+```
+
+3) Prepare JE_D5 object
+```{r, preload single group data}
+D5 <- subset(JE_combined, orig.ident=='D5')
+D5_datainput <- D5[["RNA"]]@data  #Make sure you are using the normalized data
+D5_meta <- D5@meta.data  #metadata
+head(D5_meta) #check the data structure
+D5_meta <- D5_meta[,c(1,9)] #We only need group info (col1) and celltype(col10) metadata
+colnames(D5_meta) <- c("group","labels") #label
+D5_meta
+```
+
+
+```{r, Create CellChat object for single group}
+D5_cellchat <- createCellChat(object = D5_datainput, 
+                                 meta = D5_meta, 
+                                 group.by = "labels")
+```
+
+
+```{r, prepare cellchat for single group}
+D5_cellchat <- addMeta(D5_cellchat, meta = D5_meta)##add meta data
+D5_cellchat <- setIdent(D5_cellchat, ident.use = "labels") # set label as celltype
+levels(D5_cellchat@idents) #check cell type
+D5Size <- as.numeric(table(D5_cellchat@idents)) # table for cellnumber in each celltype
+D5Size
+```
+
+
+
+4) Prepare cellchat database
+```{r, prepare cellchat database}
+CellChatDB <- CellChatDB.mouse# CellChatDB.human for human sample
+showDatabaseCategory(CellChatDB) #check pathways included
+
+```
+
+### 3.2.2 CellChat analysis for individual Object
+1) JE_D0
+Preprocess cellchat DB
+```{r,Preprocess cellchat DB}
+dplyr::glimpse(CellChatDB$interaction)  ###check data structure of DB
+#CellChatDB_interaction <- CellChatDB$interaction
+CellChatDB.use <- subsetDB(CellChatDB, search = "Secreted Signaling") # here we chose “Secreted Signaling”
+#You may also chose other pathway such ase ECM-Recepter, Cell-Cell Contact
+#CellChatDB.use <- subsetDB(CellChatDB, search = "ECM-Recepter") 
+
+```
+```{r, intersect DB with cellchat}
+D0_cellchat@DB <- CellChatDB.use
+```
+
+ Prepare cellchat object with DB
+```{r,Prepare cellchat object with DB for single sample}
+D0_cellchat <- subsetData(D0_cellchat, features = NULL) #feature =NULL if you don't know which geneset to persue, but you can always choose gene set of interest.
+D0_cellchat <- identifyOverExpressedGenes(D0_cellchat) ###Search for highly expressed recepter-ligand
+D0_cellchat <- identifyOverExpressedInteractions(D0_cellchat) ###Search for highly expressed interaction
+# project gene expression data onto PPI network (optional)
+D0_cellchat <- projectData(D0_cellchat, PPI.mouse) #PPI.human for human. I don't quite get the function???
+
+```
+
+computeCommunProb, parameters need to be considered thoroughly.
+```{r,computeCommunProb}
+D0_cellchat <- computeCommunProb(D0_cellchat, raw.use=T)#
+D0_cellchat <- filterCommunication(D0_cellchat, min.cells = 10)##filter interaction in less than 10 cells.
+
+```
+
+
+ Check data structure
+```{r, check cellchat result structure}
+D0.net <- subsetCommunication(D0_cellchat)  ###check ALL cell communication
+write.csv(D0.net, file = "./OutputTable/WT_suture_D0_net_inter.csv")
+D0_cellchat.net <- subsetCommunication(D0_cellchat, sources.use = c(1,2), targets.use = c(4,5))## (Option1) Specifying cells
+D0_cellchat.net <- subsetCommunication(D0_cellchat, signaling = c("ncWNT", "IGF")) #(Option 2) Specifying pathway
+# If you encounter an error "No significant signaling interactions are inferred based on the input!", that means you need to check the net.csv to pick the significant interaction again.
+
+```
+
+Infer of interaction network
+```{r, interaction inference}
+D0_cellchat <- computeCommunProbPathway(D0_cellchat)#summarize interaction
+D0_cellchat <- aggregateNet(D0_cellchat)#aggregate the interaction network
+#You may specify sources.use，targets.use.
+
+```
+
+2) JE_D3
+Preprocess cellchat DB
+```{r,Preprocess cellchat DB}
+dplyr::glimpse(CellChatDB$interaction)  ###check data structure of DB
+#CellChatDB_interaction <- CellChatDB$interaction
+CellChatDB.use <- subsetDB(CellChatDB, search = "Secreted Signaling") # here we chose “Secreted Signaling”
+#You may also chose other pathway such ase ECM-Recepter, Cell-Cell Contact
+#CellChatDB.use <- subsetDB(CellChatDB, search = "ECM-Recepter") 
+
+```
+
+```{r, intersect DB with cellchat}
+D3_cellchat@DB <- CellChatDB.use
+```
+
+ Prepare cellchat object with DB
+```{r,Prepare cellchat object with DB for single sample}
+D3_cellchat <- subsetData(D3_cellchat, features = NULL) #feature =NULL if you don't know which geneset to persue, but you can always choose gene set of interest.
+D3_cellchat <- identifyOverExpressedGenes(D3_cellchat) ###Search for highly expressed recepter-ligand
+D3_cellchat <- identifyOverExpressedInteractions(D3_cellchat) ###Search for highly expressed interaction
+# project gene expression data onto PPI network (optional)
+D3_cellchat <- projectData(D3_cellchat, PPI.mouse) #PPI.human for human. I don't quite get the function???
+
+```
+
+computeCommunProb, parameters need to be considered thoroughly.
+```{r,computeCommunProb}
+D3_cellchat <- computeCommunProb(D3_cellchat, raw.use=T)
+D3_cellchat <- filterCommunication(D3_cellchat, min.cells = 10)##filter interaction in less than 10 cells.
+
+```
+
+
+ Check data structure
+```{r, check cellchat result structure}
+D3.net <- subsetCommunication(D3_cellchat)  ###check ALL cell communication
+write.csv(D3.net, file = "./OutputTable/WT_suture_D3_net_inter.csv")
+D3_cellchat.net <- subsetCommunication(D3_cellchat, sources.use = c(1,2), targets.use = c(4,5))## (Option1) Specifying cells
+D3_cellchat.net <- subsetCommunication(D3_cellchat, signaling = c("ncWNT", "IGF")) #(Option 2) Specifying pathway
+# If you encounter an error "No significant signaling interactions are inferred based on the input!", that means you need to check the net.csv to pick the significant interaction again.
+
+```
+
+Infer of interaction network
+```{r, interaction inference}
+D3_cellchat <- computeCommunProbPathway(D3_cellchat)#summarize interaction
+D3_cellchat <- aggregateNet(D3_cellchat)#aggregate the interaction network
+#You may specify sources.use，targets.use.
+
+```
+
+3) JE_D5
+Preprocess cellchat DB
+```{r,Preprocess cellchat DB}
+dplyr::glimpse(CellChatDB$interaction)  ###check data structure of DB
+#CellChatDB_interaction <- CellChatDB$interaction
+CellChatDB.use <- subsetDB(CellChatDB, search = "Secreted Signaling") # here we chose “Secreted Signaling”
+#You may also chose other pathway such ase ECM-Recepter, Cell-Cell Contact
+#CellChatDB.use <- subsetDB(CellChatDB, search = "ECM-Recepter") 
+
+```
+```{r, intersect DB with cellchat}
+D5_cellchat@DB <- CellChatDB.use
+```
+
+ Prepare cellchat object with DB
+```{r,Prepare cellchat object with DB for single sample}
+D5_cellchat <- subsetData(D5_cellchat, features = NULL) #feature =NULL if you don't know which geneset to persue, but you can always choose gene set of interest.
+D5_cellchat <- identifyOverExpressedGenes(D5_cellchat) ###Search for highly expressed recepter-ligand
+D5_cellchat <- identifyOverExpressedInteractions(D5_cellchat) ###Search for highly expressed interaction
+# project gene expression data onto PPI network (optional)
+D5_cellchat <- projectData(D5_cellchat, PPI.mouse) #PPI.human for human. I don't quite get the function???
+
+```
+
+computeCommunProb, parameters need to be considered thoroughly.
+```{r,computeCommunProb}
+D5_cellchat <- computeCommunProb(D5_cellchat, raw.use=T)
+D5_cellchat <- filterCommunication(D5_cellchat, min.cells = 10)##filter interaction in less than 10 cells.
+
+```
+
+
+ Check data structure
+```{r, check cellchat result structure}
+D5.net <- subsetCommunication(D5_cellchat)  ###check ALL cell communication
+write.csv(D5.net, file = "./OutputTable/WT_suture_D5_net_inter.csv")
+D5_cellchat.net <- subsetCommunication(D5_cellchat, sources.use = c(1,2), targets.use = c(4,5))## (Option1) Specifying cells
+D5_cellchat.net <- subsetCommunication(D5_cellchat, signaling = c("ncWNT", "IGF")) #(Option 2) Specifying pathway
+# If you encounter an error "No significant signaling interactions are inferred based on the input!", that means you need to check the net.csv to pick the significant interaction again.
+
+```
+
+Infer of interaction network
+```{r, interaction inference}
+D5_cellchat <- computeCommunProbPathway(D5_cellchat)#summarize interaction
+D5_cellchat <- aggregateNet(D5_cellchat)#aggregate the interaction network
+#You may specify sources.use，targets.use.
+
+```
+
+4) Save single cellchat output
+```{r}
+save(D0_cellchat,D0_datainput, D0_meta, D0_cellchat.net, D0Size,
+     D3_cellchat,D3_datainput, D3_meta, D3_cellchat.net, D3Size,
+     D5_cellchat,D5_datainput, D5_meta, D5_cellchat.net, D5Size,
+     file = "./SeuratObject/JE_combined_D0_D3_D5_cellchat.RData")
+```
+
+
+
+### 3.2.3 Merge D0 and D3 CellChat
+```{r, merge cellchat}
+D0_cellchat <- netAnalysis_computeCentrality(D0_cellchat)
+D3_cellchat <- netAnalysis_computeCentrality(D3_cellchat)
+
+cellchat.list <- list(D0=D0_cellchat,
+                      D3=D3_cellchat) #D0 as control
+
+cellchat <- mergeCellChat(cellchat.list,
+                          add.names = names(cellchat.list))#合并单独组的cellchat
+
+```
+
+1) Compare Interaction counts D0 and D3
+```{r,Compare Interaction}
+par(mfrow = c(1,2))
+p1 <- compareInteractions(cellchat, show.legend = F, group = c(1,2),size.text=14)
+p2 <- compareInteractions(cellchat, show.legend = F, group = c(1,2), measure = "weight",size.text=14)
+p1+p2
+```
+2) Compare Interaction weight D0 and D3
+*blue indicate decrease (D3 vs D0 as control) , while red indicate increase.*
+```{r,Compare Interaction weight}
+par(mfrow = c(1,2), xpd=TRUE)
+netVisual_diffInteraction(cellchat, weight.scale = T)
+netVisual_diffInteraction(cellchat, weight.scale = T, measure = "weight")
+
+```
+```{r}
+gg1 <- netVisual_heatmap(cellchat)
+#> Do heatmap based on a merged object
+gg2 <- netVisual_heatmap(cellchat, measure = "weight")
+#> Do heatmap based on a merged object
+gg1 + gg2
+```
+
+
+3) Integrate visualization D0 and D3
+```{r}
+weight.max <- getMaxWeight(cellchat.list, attribute = c("idents","count"))
+par(mfrow = c(1,2), xpd=TRUE)
+for (i in 1:length(cellchat.list)) {
+  netVisual_circle(cellchat.list[[i]]@net$count, 
+                   weight.scale = T, label.edge= F,
+                   edge.weight.max = weight.max[2], 
+                   edge.width.max = 12, 
+                   title.name = paste0("Number of interactions - ", names(cellchat.list)[i]))
+}
+
+
+```
+4) Major celltype D0 and D3
+```{r}
+num.link <- sapply(cellchat.list, function(x) {rowSums(x@net$count) + colSums(x@net$count)-diag(x@net$count)})
+weight.MinMax <- c(min(num.link), max(num.link)) # group2 the dot size in the different datasets
+gg <- list()
+for (i in 1:length(cellchat.list)) {
+  gg[[i]] <- netAnalysis_signalingRole_scatter(cellchat.list[[i]], title = names(cellchat.list)[i], weight.MinMax = weight.MinMax)
+}
+patchwork::wrap_plots(plots = gg)
+
+
+```
+
+5)  Major different pathway betwwn sample D0 and D3
+Outgoing
+```{r,fig.width=5, fig.height=5}
+
+
+library(ComplexHeatmap)
+
+i = 1
+# combining all the identified signaling pathways from different datasets 
+# adjust height according to the crowdness betwween different pathway
+
+pathway.union <- union(cellchat.list[[i]]@netP$pathways, cellchat.list[[i+1]]@netP$pathways)
+ht1 = netAnalysis_signalingRole_heatmap(cellchat.list[[i]], pattern = "outgoing", signaling = pathway.union, title = names(cellchat.list)[i], width = 5, height = 9)
+ht2 = netAnalysis_signalingRole_heatmap(cellchat.list[[i+1]], pattern = "outgoing", signaling = pathway.union, title = names(cellchat.list)[i+1], width = 5, height = 9)
+
+draw(ht1 + ht2, ht_gap = unit(1.5, "cm"))
+
+```
+Incoming
+```{r,fig.width=5, fig.height=5}
+
+
+library(ComplexHeatmap)
+
+i = 1
+# combining all the identified signaling pathways from different datasets 
+# adjust height according to the crowdness betwween different pathway
+
+ht1 = netAnalysis_signalingRole_heatmap(cellchat.list[[i]], pattern = "incoming", signaling = pathway.union, title = names(cellchat.list)[i], width = 5, height = 9, color.heatmap = "GnBu")
+ht2 = netAnalysis_signalingRole_heatmap(cellchat.list[[i+1]], pattern = "incoming", signaling = pathway.union, title = names(cellchat.list)[i+1], width = 5, height = 9, color.heatmap = "GnBu")
+draw(ht1 + ht2, ht_gap = unit(1.5, "cm"))
+
+```
+
+6) Functional similar pathway D0 and D3
+```{r}
+# Abort install python if asked
+cellchat <- computeNetSimilarityPairwise(cellchat, type = "functional")
+#> Compute signaling network similarity for datasets 1 2
+cellchat <- netEmbedding(cellchat, type = "functional")
+#> Manifold learning of the signaling networks for datasets 1 2
+cellchat <- netClustering(cellchat, type = "functional")
+#> Classification learning of the signaling networks for datasets 1 2
+# Visualization in 2D-space
+netVisual_embeddingPairwise(cellchat, type = "functional", label.size = 3.5)
+#> 2D visualization of signaling networks from datasets 1 2
+```
+7) Structural similar pathway D0 and D3
+```{r}
+cellchat <- computeNetSimilarityPairwise(cellchat, type = "structural")
+#> Compute signaling network similarity for datasets 1 2
+cellchat <- netEmbedding(cellchat, type = "structural")
+#> Manifold learning of the signaling networks for datasets 1 2
+cellchat <- netClustering(cellchat, type = "structural")
+#> Classification learning of the signaling networks for datasets 1 2
+# Visualization in 2D-space
+netVisual_embeddingPairwise(cellchat, type = "structural", label.size = 3.5)
+#> 2D visualization of signaling networks from datasets 1 2
+```
+```{r}
+netVisual_embeddingPairwiseZoomIn(cellchat, type = "structural", nCol = 2)
+#> 2D visualization of signaling networks from datasets 1 2
+```
+
+
+8）Pathway distance D0 and D3
+```{r}
+rankSimilarity(cellchat, type = "functional")
+#> Compute the distance of signaling networks between datasets 1 2
+```
+*This is critical for your downstream analysis *
+```{r}
+gg1 <- rankNet(cellchat, mode = "comparison", stacked = T, do.stat = TRUE)
+gg2 <- rankNet(cellchat, mode = "comparison", stacked = F, do.stat = TRUE)
+gg1 + gg2
+```
+
+### 3.2.4 Merge D5 and D3 CellChat
+```{r, merge cellchat}
+D3_cellchat <- netAnalysis_computeCentrality(D3_cellchat)
+D5_cellchat <- netAnalysis_computeCentrality(D5_cellchat)
+
+cellchat.list <- list(D3=D3_cellchat,
+                      D5=D5_cellchat) #D3 as control
+
+cellchat <- mergeCellChat(cellchat.list,
+                          add.names = names(cellchat.list))#合并单独组的cellchat
+
+```
+
+1) Compare Interaction counts D3 and D5
+```{r,Compare Interaction}
+par(mfrow = c(1,2))
+p1 <- compareInteractions(cellchat, show.legend = F, group = c(1,2),size.text=14)
+p2 <- compareInteractions(cellchat, show.legend = F, group = c(1,2), measure = "weight",size.text=14)
+p1+p2
+```
+2) Compare Interaction weight D3 and D5
+*blue indicate decrease (D5 vs D3 as control) , while red indicate increase.*
+```{r,Compare Interaction weight}
+par(mfrow = c(1,2), xpd=TRUE)
+netVisual_diffInteraction(cellchat, weight.scale = T)
+netVisual_diffInteraction(cellchat, weight.scale = T, measure = "weight")
+
+```
+```{r}
+gg1 <- netVisual_heatmap(cellchat)
+#> Do heatmap based on a merged object
+gg2 <- netVisual_heatmap(cellchat, measure = "weight")
+#> Do heatmap based on a merged object
+gg1 + gg2
+```
+
+
+3) Integrate visualization D3 and D5
+```{r}
+weight.max <- getMaxWeight(cellchat.list, attribute = c("idents","count"))
+par(mfrow = c(1,2), xpd=TRUE)
+for (i in 1:length(cellchat.list)) {
+  netVisual_circle(cellchat.list[[i]]@net$count, 
+                   weight.scale = T, label.edge= F,
+                   edge.weight.max = weight.max[2], 
+                   edge.width.max = 12, 
+                   title.name = paste0("Number of interactions - ", names(cellchat.list)[i]))
+}
+
+
+```
+4) Major celltype D3 and D5
+```{r}
+num.link <- sapply(cellchat.list, function(x) {rowSums(x@net$count) + colSums(x@net$count)-diag(x@net$count)})
+weight.MinMax <- c(min(num.link), max(num.link)) # group2 the dot size in the different datasets
+gg <- list()
+for (i in 1:length(cellchat.list)) {
+  gg[[i]] <- netAnalysis_signalingRole_scatter(cellchat.list[[i]], title = names(cellchat.list)[i], weight.MinMax = weight.MinMax)
+}
+patchwork::wrap_plots(plots = gg)
+
+
+```
+
+5)  Major different pathway betwwn sample D3 and D5
+Outgoing
+```{r,fig.width=5, fig.height=5}
+
+
+library(ComplexHeatmap)
+
+i = 1
+# combining all the identified signaling pathways from different datasets 
+# adjust height according to the crowdness betwween different pathway
+
+pathway.union <- union(cellchat.list[[i]]@netP$pathways, cellchat.list[[i+1]]@netP$pathways)
+ht1 = netAnalysis_signalingRole_heatmap(cellchat.list[[i]], pattern = "outgoing", signaling = pathway.union, title = names(cellchat.list)[i], width = 5, height = 9)
+ht2 = netAnalysis_signalingRole_heatmap(cellchat.list[[i+1]], pattern = "outgoing", signaling = pathway.union, title = names(cellchat.list)[i+1], width = 5, height = 9)
+
+draw(ht1 + ht2, ht_gap = unit(1.5, "cm"))
+
+```
+Incoming
+```{r,fig.width=5, fig.height=5}
+
+
+library(ComplexHeatmap)
+
+i = 1
+# combining all the identified signaling pathways from different datasets 
+# adjust height according to the crowdness betwween different pathway
+
+ht1 = netAnalysis_signalingRole_heatmap(cellchat.list[[i]], pattern = "incoming", signaling = pathway.union, title = names(cellchat.list)[i], width = 5, height = 9, color.heatmap = "GnBu")
+ht2 = netAnalysis_signalingRole_heatmap(cellchat.list[[i+1]], pattern = "incoming", signaling = pathway.union, title = names(cellchat.list)[i+1], width = 5, height = 9, color.heatmap = "GnBu")
+draw(ht1 + ht2, ht_gap = unit(1.5, "cm"))
+
+```
+
+6) Functional similar pathway D3 and D5
+```{r}
+# Abort install python if asked
+cellchat <- computeNetSimilarityPairwise(cellchat, type = "functional")
+#> Compute signaling network similarity for datasets 1 2
+cellchat <- netEmbedding(cellchat, type = "functional")
+#> Manifold learning of the signaling networks for datasets 1 2
+cellchat <- netClustering(cellchat, type = "functional")
+#> Classification learning of the signaling networks for datasets 1 2
+# Visualization in 2D-space
+netVisual_embeddingPairwise(cellchat, type = "functional", label.size = 3.5)
+#> 2D visualization of signaling networks from datasets 1 2
+```
+7) Structural similar pathway D3 and D5
+```{r}
+cellchat <- computeNetSimilarityPairwise(cellchat, type = "structural")
+#> Compute signaling network similarity for datasets 1 2
+cellchat <- netEmbedding(cellchat, type = "structural")
+#> Manifold learning of the signaling networks for datasets 1 2
+cellchat <- netClustering(cellchat, type = "structural")
+#> Classification learning of the signaling networks for datasets 1 2
+# Visualization in 2D-space
+netVisual_embeddingPairwise(cellchat, type = "structural", label.size = 3.5)
+#> 2D visualization of signaling networks from datasets 1 2
+```
+```{r}
+netVisual_embeddingPairwiseZoomIn(cellchat, type = "structural", nCol = 2)
+#> 2D visualization of signaling networks from datasets 1 2
+```
+
+
+8）Pathway distance D3 and D5
+```{r}
+rankSimilarity(cellchat, type = "functional")
+#> Compute the distance of signaling networks between datasets 1 2
+```
+*This is critical for your downstream analysis *
+```{r}
+gg1 <- rankNet(cellchat, mode = "comparison", stacked = T, do.stat = TRUE)
+gg2 <- rankNet(cellchat, mode = "comparison", stacked = F, do.stat = TRUE)
+gg1 + gg2
+```
+
+
+# X R session info
+```{r, session info}
+sessionInfo()
+```
+
+
+
+
+
+
+
