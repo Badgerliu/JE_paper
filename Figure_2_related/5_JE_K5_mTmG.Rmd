@@ -1,0 +1,994 @@
+---
+title: "JE 2nd using K5mTmG tracing -- Integrating Seurat Ojbects"
+author: "Huan"
+date: "8/24/2023"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  message = TRUE,
+  warning = FALSE,
+  cache = TRUE,
+  echo = TRUE,
+  cache.lazy = FALSE)
+```
+
+This note was used for integrative single cell RNA-seq analysis of `K5 mTmG JE repair 2nd biological replicate`. # summary for the goal of this current research 
+Sample ID: `JE_K5_D0` , `JE_K5_D3` `JE_K5_D5`
+
+# 1 Setup of analysis environment
+## 1.1 Package installation 
+Seurat (v3), harmony,ggplot2,magrittr and sctransform packages were installed.
+
+## 1.2 Load environment and packages
+```{r, load of packages and setup of the environment}
+gc()
+rm(list=ls())
+library(Seurat)
+library(SeuratWrappers)
+library(sctransform)
+library(harmony)
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(ggpointdensity)
+library(monocle3)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(cowplot)
+library(clustree)
+library(RColorBrewer)
+set.seed(12)
+theme_set(theme_bw())
+```
+
+## 1.3 Load data saved Seurat objects
+```{r, load saved Seurat dataset}
+JE_K5_D0 <- readRDS("./SeuratObject/JE_K5_D0_Seurat.rds")
+JE_K5_D3 <- readRDS("./SeuratObject/JE_K5_D3_Seurat.rds")
+JE_K5_D5 <- readRDS("./SeuratObject/JE_K5_D5_Seurat.rds")
+
+```
+
+```{r, merge seurat objects}
+JE_K5 <- merge(JE_K5_D0, 
+                 y = c(JE_K5_D3, JE_K5_D5), # if you have more objects, you may add here
+                 add.cell.ids = c("JE_K5_D0","JE_K5_D3", "JE_K5_D5"), 
+                 project = "JE_K5")
+JE_K5 # 45986 features across 65155 samples within 2 assays 
+```
+Here we want to generate a list 
+```{r}
+JE_K5.list <- SplitObject(object = JE_K5, split.by = "orig.ident")
+```
+
+
+```{r, reperform SCT}
+
+for (i in 1:length(JE_K5.list)) {
+    JE_K5.list[[i]] <- SCTransform(JE_K5.list[[i]], verbose = FALSE)
+} #I'm not sure if the split and merge is necessary, but it won't cause trouble
+
+```
+
+## 1.4 Integration
+Following the discussion in `https://github.com/immunogenomics/harmony/issues/41`
+```{r, select integration feature for the merged dataset}
+JE_K5.features <- SelectIntegrationFeatures(object.list = JE_K5.list, nfeatures = 5000) #number of nfeatures should be considered carefully.
+JE_K5 <- merge(JE_K5.list[[1]],
+                   y = JE_K5.list[2:length(JE_K5.list)],  
+                   project = "JE_K5", 
+                   merge.data = TRUE)
+VariableFeatures(JE_K5) <- JE_K5.features
+```
+
+PCA using SCT features
+```{r,PCA using SCT features}
+JE_K5 <- RunPCA(object = JE_K5, assay = "SCT", npcs = 50)
+```
+
+
+
+```{r, integration and batch effect removal using hamony}
+system.time({
+    JE_K5 <- RunHarmony(object = JE_K5, 
+                         assay.use = "SCT",
+                         reduction = "pca",
+                         dims.use = 1:50, # this is a default number, but you can always change it as your wish
+                         group.by.vars = "orig.ident",
+                         plot_convergence = TRUE)
+})
+```
+
+## 1.5 Dimension reduction
+*You may probe dims and resolution in details*
+```{r, dimension reduction}
+JE_K5 <- RunUMAP(object = JE_K5, assay = "SCT", reduction = "harmony", dims = 1:50) #You may probe dims in details
+JE_K5 <- FindNeighbors(object = JE_K5, assay = "SCT", reduction = "harmony", dims = 1:50) #You may probe dims in details
+```
+*For details of probing resolution, refer to `https://cloud.tencent.com/developer/article/1825681`. *
+
+```{r, probing resolution parameter}
+library(tidyverse)
+library(cowplot)
+library(clustree)
+JE_K5.resolution <- FindClusters(JE_K5,dims=1:50,resolution = seq(from=0,by=.2,length=10))
+
+```
+```{r, use cluster tree to check cluster resolution, fig.height=10, fig.width=10}
+clustree(JE_K5.resolution)
+```
+*Choosing resolution is quite arbitrary and no conclusion has been attained before biological validation*
+The `JE_K5.resolution` object has many choice for resultion, such as SCT_snn_res.0.6. You may want to plot and check. Here are some examples:
+```{r, check the umap plot for different resolutions}
+DimPlot(JE_K5.resolution, reduction = "umap", label = T, group.by = "SCT_snn_res.0.2")
+DimPlot(JE_K5.resolution, reduction = "umap", label = T, group.by = "SCT_snn_res.0.4")
+DimPlot(JE_K5.resolution, reduction = "umap", label = T, group.by = "SCT_snn_res.0.6")
+DimPlot(JE_K5.resolution, reduction = "umap", label = T, group.by = "SCT_snn_res.0.8")
+
+```
+From the above plot you may "see" how different resolutions result in different cluster, and "shift" of cluster with the change of resolution.
+
+
+For simple celltype clustering, we use the lowest resolution 0.2
+
+```{r, cluster with a suitable resolution resolution 0.2}
+JE_K5 <- FindClusters(object = JE_K5, resolution = 0.2) #You may probe resolution in details
+```
+
+```{r, test plot for resolution 0.2}
+plots <- DimPlot(JE_K5, group.by = c("orig.ident", "seurat_clusters"), combine = FALSE, pt.size = .2)
+plots <- lapply(X = plots, FUN = function(x) x + theme(legend.position = "top") + guides(color = guide_legend(nrow = 5, 
+    byrow = TRUE, override.aes = list(size = 4))))
+CombinePlots(plots)
+```
+
+
+## 1.6 Initial plots 
+```{r, initial plots for raw cell cluster information}
+#group_by_cluster
+plot1 = DimPlot(JE_K5, reduction = "umap", label = T)
+# group_by_sample
+plot2 = DimPlot(JE_K5, reduction = "umap", group.by = "orig.ident")
+plot3 = DimPlot(JE_K5, reduction = "umap", split.by  = "orig.ident")
+
+# combine
+plotc <- plot1 + plot2
+ggsave("./OutputFigure/JE_K5_umap.png", plot = plotc, width = 10, height = 5)# you need to channge the size parameters according to the number of plots.
+plot3
+ggsave("./OutputFigure/JE_K5_umap_split_ident.png", plot = plot3, width = 20, height = 5) # you need to channge the size parameters according to the number of plots.
+
+
+DimPlot(JE_K5, reduction = "umap", label = T)
+DimPlot(JE_K5, reduction = "umap", group.by = "orig.ident")
+
+```
+
+## 1.7 Save Object
+
+```{r, output integrated data for JE_K5}
+saveRDS(JE_K5, file = "./SeuratObject/JE_K5_harmony_20230824.rds")
+```
+
+## 1.8 (Optional) Split Object
+*This is necessary if you want to perform cellchat*
+*You may also split after assigning the cell type*
+
+For replication of the work, I split and saved object depending on orig.idents.
+
+```{r, oject split and saved, eval = FALSE}
+JE_K5_list <- SplitObject(JE_K5, split.by = "orig.ident")
+JE_K5_D0 <-JE_K5_list[["JE_K5_D0"]]
+saveRDS(JE_K5_D0, file = "./SeuratObject/JE_K5_D0_seurat_20230724.rds")
+JE_K5_D3 <-JE_K5_list[["JE_K5_D3"]]
+saveRDS(JE_K5_D3, file = "./SeuratObject/JE_K5_D3_seurat_20230724.rds")
+JE_K5_D5 <-JE_K5_list[["JE_K5_D5"]]
+saveRDS(JE_K5_D5, file = "./SeuratObject/JE_K5_D5_seurat_20230724.rds")
+```
+
+
+# 2  Marker genes identification
+## 2.0 Package load and data resume
+```{r, load of packages and setup of the environment}
+gc()
+rm(list=ls())
+library(Seurat)
+library(SeuratWrappers)
+library(sctransform)
+library(harmony)
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(ggpointdensity)
+library(monocle3)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(cowplot)
+library(clustree)
+library(RColorBrewer)
+library(scCustomize)
+set.seed(12)
+theme_set(theme_bw())
+JE_K5 <- readRDS("./SeuratObject/JE_K5_harmony_20230824.rds")
+```
+## 2.1 Marker genes identification
+Identification of marker genes
+refer to `https://github.com/satijalab/seurat/issues/2115` Perform DE using RNA rather than SCT
+```{r, generally find marker genes for JE_K5 objects resolution=0.2}
+Idents(JE_K5) <- JE_K5$seurat_clusters
+DefaultAssay(JE_K5) <- "RNA"
+JE_K5 <- NormalizeData(JE_K5)
+all.genes <- rownames(JE_K5)
+JE_K5 <- ScaleData(JE_K5, features = all.genes)
+JE_K5_markers <- FindAllMarkers(object = JE_K5, only.pos = TRUE, 
+                               min.pct = 0.25, thresh.use = 0.25) #identify positive marker genes 
+top10 <- JE_K5_markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC) # You may change n=10 to other number to get top_n genes as you wish.
+```
+
+```{r, output tables for marker genes for cluster resolution 0.2}
+write.csv(JE_K5_markers, file = "./OutputTable/JE_K5_markers_20230824.csv", row.names = FALSE)
+write.csv(top10, file = "./OutputTable/JE_K5_top10_markers_20230824.csv", row.names = FALSE)
+
+
+```
+
+Plot heatmap for marker genes
+```{r, heatmapplot for marker genes in different cluster 0.2, fig.width=10, fig.height=18 }
+#DefaultAssay(JE_K5) <- "SCT"
+DoHeatmap(JE_K5, features = top10$gene)
+ggsave("./OutputFigure/JE_K5_markers_top10_20230824.pdf", device = "pdf",#adjust filename accordingly
+       width = 30, #adjust according to the display of output
+       height = 55, #adjust according to the display of output
+       units = "cm")
+
+```
+
+
+##2.2  Dot plot for different genes of interest
+```{r, setup gene list}
+#markers refer to https://www.ncbi.nlm.nih.gov/pmc/articles/PMC7359078/ and marker genes in each cluster
+genes_to_check <- c("Col1a1", "Postn","Nfia", #Dermal
+                    "Epcam","Krt14","Krt24","Krt5","Mki67","Krtdap","Atf3",  #Epithelium
+                    "Ccl3","Cxcl2", #Macrophage
+                    "Lyz2","Cd74", #Monocyte
+                    "Plvap","Egfl7",#Endothelial cell
+                    "Icos","Cxcr6", #T cell
+                    "Mpz","Plp1", #Glial cell
+                    "Rgs5","Myh11", #Pericyte,
+                    "Ccl21a","Mmrn1", #Lymphatic endothelial cell
+                    "Hbb-bt","Hba-a1", #Erythroid cell
+                    "Cd79a","Cd79b" #B cell
+                             )
+```
+
+```{r}
+DimPlot(JE_K5, reduction = "umap", label = T)
+DimPlot(JE_K5, reduction = "umap", group.by = "orig.ident")
+```
+
+```{r, dot plot to show the distribution of marker genes in each seurat cluster}
+Idents(JE_K5) <- JE_K5$seurat_clusters
+DefaultAssay(JE_K5) <- "SCT"
+DotPlot(JE_K5, features = unique(genes_to_check),group.by = "seurat_clusters")+RotatedAxis()+
+  scale_x_discrete("")+scale_y_discrete("")
+#NA represent genes without detection, you need to adjust the name for genes of interest above
+```
+
+```{r, another version of dotplot for marker genes,fig.width=12, fig.height=8}
+Idents(JE_K5) <- JE_K5$seurat_clusters
+# Generate the dot plot
+DotPlot(JE_K5, features = unique(genes_to_check)) +
+  theme_bw() +
+  theme(panel.grid = element_blank(), 
+        axis.text.x = element_text(angle = 45, hjust = 0.5, vjust = 0.5),
+        panel.border = element_blank(),
+        axis.line.x = element_line(color = "black"),
+        axis.line.y = element_blank()) +
+  labs(x = NULL, y = NULL) + 
+  guides(size = guide_legend(order = 3)) +
+  scale_color_gradientn(values = seq(0, 1, 0.2), colours = c('#295B9F', '#FFFFFF', '#D23B3E'))
+
+ggsave("./OutputFigure/JE_K5_dotplot_marker_genes_unordered.pdf", width = 30, height =15,units = "cm")
+```
+
+
+```{r, dotplot for genes to check,fig.height=10, fig.width=10}
+
+Clustered_DotPlot(seurat_object = JE_K5, features = genes_to_check)
+```
+
+
+
+* Usually, you need to stop here, and spend one to two days to analyze the marker genes in each cluster and assign the appropriate cell type name.*
+* If you are note sure the exact cell type name, especially in case of embryonic development, you can assign it according to the uniquely-expressed genes or the general cell type plus a number, ie. `mes_2`. *
+
+
+
+# 3 Cell type assignment
+According to feature plot for different cluster, I annotate each cluster with celltype name.
+##3.1 Association of marker genes and cell type
+```{r, set different cluster to different cell type}
+new.cluster.ids <- c("Epithelium",#0
+                     "Epithelium",#1
+                     "Fibroblast",#2
+                     "Endothelial cell",#3
+                     "Epithelium",#4
+                     "Epithelium",#5
+                     "Epithelium",#6
+                     "Pericyte", #7
+                     "Monocyte", #8
+                     "Glial cell", #9
+                     "T Cell", #10
+                     "Macrophage", #11
+                     "Lymphatic Vessel", #12
+                     "Epithelium", #13
+                     "B cell" #14
+                     )
+JE_K5@meta.data$celltype<- JE_K5@meta.data$seurat_clusters
+levels(JE_K5@meta.data$celltype) <- new.cluster.ids  #celltype assignment
+```
+
+```{r,dotplot for cell types,fig.height=4, fig.width=12}
+
+DotPlot(JE_K5, features = unique(genes_to_check),group.by = "celltype")+RotatedAxis()+
+  scale_x_discrete("")+scale_y_discrete("")
+ggsave("./OutputFigure/JE_K5_harmony_dotplot_celltype.pdf",width = 15,height = 6)
+
+```
+
+
+
+```{r,red-gray version dotplot for cell types blue red color,fig.height=4, fig.width=12}
+DotPlot(JE_K5, features = unique(genes_to_check),
+        cols = c("lightgrey","red"),col.min = 0, col.max = 3,
+        group.by = "celltype")+
+  RotatedAxis()+
+  scale_x_discrete("")+
+  scale_y_discrete("")
+ggsave("./OutputFigure/JE_K5_harmony_dotplot_celltype_red.pdf",width = 15,height = 6)
+
+
+```
+```{r, blue-yellow version dotplot with different celltype, green and yellow,fig.height=6, fig.width=15}
+Idents(JE_K5) <- JE_K5$celltype
+DotPlot(JE_K5, features=unique(genes_to_check))+
+  theme_bw()+
+  theme(panel.grid = element_blank(), axis.text.x = element_text(angle=45,hjust = 0.5, vjust = 0.5))+
+  labs(x=NULL, y=NULL)+ guides(size = guide_legend(order=3))+
+  scale_color_gradientn(values = seq(0,1,0.2), colours = c('#330066', '#336699','#66CC66','#FFCC33'))
+ggsave("./OutputFigure/JE_K5_harmony_dotplot_celltype_green.pdf",width = 15,height = 6)
+```
+```{r, cell type umap plot}
+Idents(JE_K5)<-JE_K5$celltype
+#group_by_cluster
+plot1 = DimPlot(JE_K5, reduction = "umap", label = T)
+# group_by_sample
+plot2 = DimPlot(JE_K5, reduction = "umap", group.by = "orig.ident")
+plot3 = DimPlot(JE_K5, reduction = "umap", split.by  = "orig.ident")
+# combine
+plotc <- plot1 + plot2
+plotc
+ggsave("./OutputFigure/JE_K5_celltype_umap.png", plot = plotc, width = 12, height = 5)
+plot3
+ggsave("./OutputFigure/JE_K5_celltype_umap_split.png", plot = plot3, width = 12, height = 5)
+
+DimPlot(JE_K5, reduction = "umap", label = T)
+DimPlot(JE_K5, reduction = "umap", group.by = "orig.ident")
+
+```
+## 3.2 Save Object
+
+```{r, output integrated data with celltype curation, eval=FALSE}
+saveRDS(JE_K5, file = "./SeuratObject/JE_K5_harmony_celltype_20240702.rds")
+```
+
+
+# 3.3 Different population in sample
+
+## 3.3.1 Mannual comparison
+```{r, pull the number of cells in each celltype from the integrated object}
+Idents(JE_K5)<-JE_K5$celltype
+## extract meta data
+md <- JE_K5@meta.data %>% as.data.table 
+md  ## the resulting md object has one "row" per cell
+
+## count the number of cells per unique combinations of "orig.ident" and "celltype"
+md[, .N, by = c("orig.ident", "celltype")]
+
+
+## with additional casting after the counting
+split_count <- md[, .N, by = c("orig.ident", "celltype")] %>% dcast(., orig.ident ~ celltype, value.var = "N")
+split_count
+split_count[is.na(split_count)] = 0
+split_count_melt <- melt(split_count,
+                         id.vars ="orig.ident",
+                         variable.name = "celltype",
+                         value.name = "Number")
+split_count_melt
+write.csv(split_count_melt, file = "./OutputTable/JE_K5_harmony_cell_number_celltype.csv", row.names = FALSE)
+```
+
+
+```{r,calculate cell number and percentage in different stages}
+## Generate a stack-bar plot (refer to "https://www.geeksforgeeks.org/grouped-stacked-and-percent-stacked-barplot-in-ggplot2/")
+as.factor(split_count_melt$celltype)
+levels(split_count_melt$celltype)
+# Re order the levels if it is not the sequences you desire.
+
+levels(split_count_melt$celltype)
+ggplot(split_count_melt, aes(fill = orig.ident,x=celltype,y=Number))+
+geom_bar(position = "fill", stat = "identity")+
+ggtitle("Percentage of cells in each cluster")+
+  xlab("celltype")+
+  ylab("Percentage of cells")+ theme (axis.text.x = element_text (angle = 45, hjust = 1))
+theme(plot.title = element_text(hjust = 0.5))
+ggsave("./OutputFigure/JE_K5_harmony_Percentage_cell_in_each_celltype_unnormalized.pdf", height = 3, width = 7.5)
+```
+
+```{r, normalized to total number in each celltype}
+##Percent count
+
+split_count$total <-apply(split_count[,c(2:11)], 1, sum) # add `total` to the last column, 13 is the number of columns
+split_count_noname <- split_count[,-1] 
+split_count_mut <- mutate_all(split_count_noname, funs("percent" = ./split_count$total*100))
+split_count_mut_2 <- cbind(split_count[,1],split_count_mut)
+split_count_mut_3 <- split_count_mut_2[,-c(2:12,23)] # remove the number (2:14) and Total percentage (number of columns:27)
+colnames(split_count_mut_3) <- gsub("_percent", "",colnames(split_count_mut_3))
+split_count_mut_3
+write.csv(split_count_mut_3, file="./OutputTable/JE_K5_harmony_cell_percentage_celltype_unmelt.csv", row.names = FALSE)
+split_count_mut_melt <- melt(split_count_mut_3,
+                         id.vars ="orig.ident",
+                         variable.name = "celltype",
+                         value.name = "Percentage")
+split_count_mut_melt
+write.csv(split_count_mut_melt, file = "./OutputTable/JE_K5_harmony_cell_percentage_celltype.csv", row.names = FALSE)
+## Generate a stack-bar plot for percentage of cells
+as.factor(split_count_mut_melt$celltype)
+# Re order the levels
+#split_count_mut_melt[,celltype:=fct_relevel(split_count_mut_melt$celltype,"Peri","Chondro","EC","LIG","PO","OG1","OG2","OG3","MG1", "MG2", "MG3", "MG4")]
+ggplot(split_count_mut_melt, aes(fill = orig.ident,x=celltype,y=Percentage))+
+geom_bar(position = "fill", stat = "identity")+
+ggtitle("Percentage of cells in each celltype")+
+  xlab("celltype")+
+  ylab("Percentage of cells")+ theme (axis.text.x = element_text (angle = 45, hjust = 1))
+theme(plot.title = element_text(hjust = 0.5))
+ggsave("./OutputFigure/JE_K5_harmony_Percentage_cell_in_each_celltype_normalized.pdf", height = 3, width = 7.5)
+
+ggplot(split_count_mut_melt, aes(x = celltype, y =Percentage)) +
+  geom_col(aes(fill = orig.ident), color = "black") + theme_bw()+ theme(panel.grid = element_blank())+ theme (axis.text.x = element_text (angle = 45, hjust = 1))
+ggsave("./OutputFigure/JE_K5_harmony_Percentage_cell_in_each_celltype_normalized_stack.pdf", height = 3, width = 15)
+
+ggplot(split_count_mut_melt, aes(x = celltype, y =Percentage)) +
+  geom_col(aes(fill = orig.ident), color = "black", position = "dodge") + theme_bw()+ theme(panel.grid = element_blank())+ theme (axis.text.x = element_text (angle = 45, hjust = 1))
+ggsave("./OutputFigure/JE_K5_harmony_Percentage_cell_in_each_celltype_normalized_dodge2.pdf", height = 3, width = 15)
+
+```
+
+## 3.3.2 DPA approach
+
+```{r, source functions for DPA assay}
+source("diffprop_functions.R")
+```
+
+```{r, generate the table of cell number}
+## Read in file of counts of cells in each population across conditions
+
+obs.counts <- md[, .N, by = c("orig.ident", "celltype")] %>% dcast(., orig.ident ~ celltype, value.var = "N")
+obs.counts[is.na(obs.counts)] = 0
+obs.counts <- obs.counts %>% remove_rownames %>% column_to_rownames(var="orig.ident")
+write.csv(obs.counts, file = "./OutputTable/JE_K5_test.csv", row.names = TRUE)
+# Download and double check if the first column is the name for orig.ident.
+
+```
+
+
+```{r, DPA approach for statistical analysis}
+obs.counts = as.matrix(read.csv("./OutputTable/JE_K5_test.csv", row.names = 1))
+print(obs.counts)
+## Run an example using error (p) of 0.1 and with 100,000 iterations
+tip.exp <- generateNull(obs.counts, n=100000, p=0.1);     # Generate the null distribution based on sampling
+
+obs.counts/apply(obs.counts, 1, sum)
+
+### P-value tests for D3 vs D0
+two.class.test(obs.counts, tip.exp, cond.control="JE_K5_D0", cond.treatment="JE_K5_D3",to.plot=F)
+
+### P-value tests for D5 vs D0
+two.class.test(obs.counts, tip.exp, cond.control="JE_K5_D0", cond.treatment="JE_K5_D5",to.plot=F)
+
+### P-value tests for D5 vs D3
+two.class.test(obs.counts, tip.exp, cond.control="JE_K5_D3", cond.treatment="JE_K5_D5",to.plot=F)
+
+```
+
+
+```{r, Get a table of P-values for a range of p values }
+
+res.table.D3vsD0 = c()
+res.table.D5vsD0 = c()
+res.table.D5vsD3 = c()
+
+
+## Go through a series of error probabilities
+for (err_prob in c(0.5, 0.4, 0.3, 0.25, 0.2, 0.15, 0.1, 0.05)) {
+  tip.exp <- generateNull(obs.counts, n=100000, p=err_prob);
+  ## D3 vs D0
+  res.1 = two.class.test(obs.counts, tip.exp, cond.control="JE_K5_D0", cond.treatment="JE_K5_D3",to.plot=F)
+  res.table.D3vsD0 = rbind(res.table.D3vsD0, res.1)
+  ## D5 vs D0
+  res.1 = two.class.test(obs.counts, tip.exp, cond.control="JE_K5_D0", cond.treatment="JE_K5_D5",to.plot=F)
+  res.table.D5vsD0 = rbind(res.table.D5vsD0, res.1)
+  ## D5 vs D3
+  res.1 = two.class.test(obs.counts, tip.exp, cond.control="JE_K5_D3", cond.treatment="JE_K5_D5",to.plot=F)
+  res.table.D5vsD3 = rbind(res.table.D5vsD3, res.1)
+ 
+}
+
+rownames(res.table.D3vsD0) = as.character(c(0.5, 0.4, 0.3, 0.25, 0.2, 0.15, 0.1, 0.05))
+write.csv(res.table.D3vsD0, file = "./OutputTable/JE_K5_res.table.D3vsD0.csv", row.names = TRUE)
+rownames(res.table.D5vsD0) = as.character(c(0.5, 0.4, 0.3, 0.25, 0.2, 0.15, 0.1, 0.05))
+write.csv(res.table.D5vsD0, file = "./OutputTable/JE_K5_res.table.D5vsD0.csv", row.names = TRUE)
+rownames(res.table.D5vsD3) = as.character(c(0.5, 0.4, 0.3, 0.25, 0.2, 0.15, 0.1, 0.05))
+write.csv(res.table.D5vsD3, file = "./OutputTable/JE_K5_res.table.D5vsD3.csv", row.names = TRUE)
+
+```
+
+## 3.4 Split object by cell type
+```{r, preset celltype}
+Idents(JE_K5)<-JE_K5$celltype
+```
+
+### 3.4.1 Epithelium
+```{r, subset mes cluster by celltype}
+JE_K5_epi <- subset(JE_K5, idents="Epithelium")
+```
+
+```{r,check data structure after subset}
+JE_K5_epi
+table(JE_K5_epi@meta.data$orig.ident)
+DimPlot(JE_K5_epi, reduction = "umap", label = T)
+```
+
+```{r, export suture_mes populations, eval=FALSE}
+saveRDS(JE_K5_epi, file = "./SeuratObject/JE_K5_epi_raw_20230728.rds")
+```
+### 3.4.2 Dermal
+```{r, subset dermal cluster by celltype}
+JE_K5_derm <- subset(JE_K5, idents="Dermal")
+```
+
+```{r,check data structure after subset dermal population}
+JE_K5_derm
+table(JE_K5_derm@meta.data$orig.ident)
+DimPlot(JE_K5_derm, reduction = "umap", label = T)
+```
+
+```{r, export dermal population populations}
+saveRDS(JE_K5_derm, file = "./SeuratObject/JE_K5_derm_raw_20230728.rds")
+```
+
+
+
+
+# 4.1 Subcluster of the Epi cluster
+Using the output Seurat object recoreded in "JE_combined_celltype.Rmd", I put back all the subcluster information back to the whole JE_2nd object
+## 4.1.1 Load Seurat objects
+```{r, resume 2}
+gc()
+rm(list=ls())
+library(Seurat)
+library(SeuratWrappers)
+library(sctransform)
+library(harmony)
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(ggpointdensity)
+library(monocle3)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(cowplot)
+library(clustree)
+library(RColorBrewer)
+library(scCustomize)
+set.seed(12)
+theme_set(theme_bw())
+
+```
+
+```{r,resume with Seurat objects 3}
+JE_K5 <- readRDS(file = "./SeuratObject/JE_K5_harmony_celltype_20240702.rds")
+JE_K5_epi_MAGIC <- readRDS(file = "./SeuratObject/JE_K5_epi_MAGIC_harmony_renamed.rds")
+```
+
+Rename celltype in JE_K5_epi_MAGIC
+
+```{r, rename cluster}
+new.cluster.ids <- c("Basal", #Cluster 0 
+                     "Intermidate", #Cluster 1 
+                     "Basal", #Cluster 2 
+                     "Keratinocyte", #Cluster 3 
+                     "Basal", #Cluster 4 
+                     "Cycling", #Cluster 5 
+                     "Basal", #Cluster 6 
+                     "Intermidate", #Cluster 7 
+                     "Intermidate", #Cluster 8 
+                     "Intermidate", #Cluster 9 
+                     "Basal", #Cluster 10 
+                     "JE", #Cluster 11
+                     "Basal" #Cluster 12 
+                     )
+Idents(JE_K5_epi_MAGIC) <- c("SCT_snn_res.0.6")
+JE_K5_epi_MAGIC@meta.data$seurat_clusters <-JE_K5_epi_MAGIC@meta.data$SCT_snn_res.0.6
+JE_K5_epi_MAGIC@meta.data$celltype<- JE_K5_epi_MAGIC@meta.data$seurat_clusters
+levels(JE_K5_epi_MAGIC@meta.data$celltype) <- new.cluster.ids
+```
+
+### 4.1.2 Put back epi
+Here, we want to put back the subcluster infor back to the whole JE_K5 object
+```{r, epi put back}
+site1=match(rownames(JE_K5_epi_MAGIC@meta.data),rownames(JE_K5@meta.data)) 
+JE_K5@meta.data$celltype <- as.character(JE_K5@meta.data$celltype ) 
+JE_K5@meta.data$celltype[site1]=as.character(JE_K5_epi_MAGIC@meta.data$celltype) 
+table(JE_K5$celltype)
+```
+```{r, cell type umap plot for JE_K5_epi_MAGIC putback}
+Idents(JE_K5)<-JE_K5$celltype
+#group_by_cluster
+plot1 = DimPlot(JE_K5, reduction = "umap", label = T, repel = T)
+# group_by_sample
+plot2 = DimPlot(JE_K5, reduction = "umap", group.by = "orig.ident")
+plot3 = DimPlot(JE_K5, reduction = "umap", split.by  = "orig.ident")
+# combine
+plotc <- plot1 + plot2
+plotc
+ggsave("./OutputFigure/JE_K5_celltype_epi_umap.png", plot = plotc, width = 13, height = 5)
+plot3
+ggsave("./OutputFigure/JE_K5_celltype_epi_umap_split.png", plot = plot3, width = 15, height = 5)
+
+DimPlot(JE_K5, reduction = "umap", label = T, repel = T)
+DimPlot(JE_K5, reduction = "umap", group.by = "orig.ident")
+
+```
+
+
+
+```{r, save JE_K5 with epi RDS}
+saveRDS(JE_K5, file = "./SeuratObject/JE_K5_harmony_celltype_20240708.rds")
+saveRDS(JE_K5_epi_MAGIC, file = "./SeuratObject/JE_K5_epi_MAGIC_harmony_renamed.rds")
+
+```
+
+
+# 4 MAGIC manipulation
+To further recapitulate the dropout sequencing results, we employed MAGIC for smoothing.
+```{r, load of packages and setup of the environment for MAGIC}
+gc()
+rm(list=ls())
+library(reticulate)
+use_condaenv("MAGIC", required = TRUE)
+library(Seurat)
+library(SeuratWrappers)
+library(sctransform)
+library(harmony)
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(ggpointdensity)
+library(monocle3)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(cowplot)
+library(clustree)
+library(gridExtra)
+library(phateR)
+library(viridis)
+library(readr)
+library(Rmagic)
+
+
+
+set.seed(12)
+theme_set(theme_bw())
+
+JE_K5 <- readRDS(file = "./SeuratObject/JE_K5_harmony_celltype_20240708.rds")
+
+```
+
+First test python environment
+```{r, load required MAGIC conda env}
+library(reticulate)
+use_condaenv("MAGIC", required = TRUE)
+```
+
+```{r, config python environment of MAGIC}
+py_config()
+```
+
+```{r, check magic packages and load}
+magic <- import("magic")
+```
+
+
+
+Generate expression matrix
+
+```{r, Generate expression matrix}
+
+JE_K5_RNA<-GetAssayData(object = JE_K5[["RNA"]], slot = "count")
+JE_K5_RNA_table<-as.data.frame(JE_K5_RNA)
+
+head(JE_K5_RNA_table)
+```
+Transpose matrix
+```{r, transpose expression matrix}
+JE_K5_RNA_table_t <- as.matrix(t(JE_K5_RNA_table))
+row.names(JE_K5_RNA_table_t) <-NULL
+JE_K5_RNA_table_t[1:5,1:10]
+```
+
+
+Filter genes expression matrix
+```{r, Filter genes expression matrix}
+# keep genes expressed in at least 10 cells
+keep_cols <- colSums(JE_K5_RNA_table_t > 0) > 10
+JE_K5_RNA_table_t <- JE_K5_RNA_table_t[,keep_cols]
+# look at the distribution of library sizes
+ggplot() +
+  geom_histogram(aes(x=rowSums(JE_K5_RNA_table_t)), bins=50) +
+  geom_vline(xintercept = 2500, color='red')
+```
+From the above plot, we can set umi threshold as 2500
+```{r,filter with umi >2500}
+# keep cells with at least 1000 UMIs
+keep_rows <- rowSums(JE_K5_RNA_table_t) > 2500
+JE_K5_RNA_table_t <- JE_K5_RNA_table_t[keep_rows,]
+```
+
+Normalizing data
+
+We should library size normalize and transform the data prior to MAGIC. Many people use a log transform, which requires adding a “pseudocount” to avoid log(0). We square root instead, which has a similar form but doesn’t suffer from instabilities at zero.
+```{r, normalize datasets}
+JE_K5_RNA_table_t <- library.size.normalize(JE_K5_RNA_table_t)
+JE_K5_RNA_table_t <- sqrt(JE_K5_RNA_table_t)
+```
+
+
+## 4.1 Further MAGIC for all genes
+Using MAGIC for downstream analysis
+
+
+```{r, MAGIC for three genes}
+JE_K5_MAGIC <- magic(JE_K5_RNA_table_t, genes=c("Krt5", "Krt14", "Epcam"))
+```
+```{r}
+saveRDS(JE_K5_MAGIC, file = "./SeuratObject/JE_K5_MAGIC_K5_K14_Epcam.rds")
+```
+
+
+We can look at the entire smoothed matrix with genes='all_genes', passing the original result to the argument init to avoid recomputing intermediate steps. Note that this matrix may be large and could take up a lot of memory.
+
+```{r}
+#JE_K5_MAGIC <- readRDS(file ="./SeuratObject/JE_K5_MAGIC_K5_K14_Epcam.rds")
+DefaultAssay(JE_K5) <- "SCT"
+JE_K5_MAGIC <- magic(JE_K5, genes="all_genes",
+                     t=12, init=JE_K5_MAGIC)
+#"Added MAGIC output to MAGIC_SCT. To use it, pass assay='MAGIC_SCT' to downstream methods or set DefaultAssay(seurat_object) <- 'MAGIC_SCT'."
+```
+
+```{r}
+saveRDS(JE_K5_MAGIC, file = "./SeuratObject/JE_K5_harmony_MAGIC_20240709.rds")
+```
+
+```{r}
+JE_K5_MAGIC_RNA<-GetAssayData(object = JE_K5_MAGIC[["MAGIC_SCT"]], slot = "data")
+JE_K5_MAGIC_RNA_table<-as.data.frame(JE_K5_MAGIC_RNA)
+
+head(JE_K5_MAGIC_RNA_table)
+```
+
+This is a matrix for further correlation analysis of any genes of interest.
+
+```{r}
+JE_K5_MAGIC_RNA_table_t <- t(JE_K5_MAGIC_RNA_table)
+JE_K5_MAGIC_RNA_table_t[1:5,1:10]
+```
+
+Test if the correlation between Krt14 and Krt5 correlates with P63
+```{r}
+JE_K5_MAGIC_RNA_table_t <- as.data.frame(JE_K5_MAGIC_RNA_table_t)
+ggplot(JE_K5_MAGIC_RNA_table_t) +
+  geom_point(aes(JE_K5_MAGIC_RNA_table_t$Krt5, JE_K5_MAGIC_RNA_table_t$Krt14, color=JE_K5_MAGIC_RNA_table_t$Trp63)) +
+  scale_color_viridis(option="B")
+```
+```{r, check correlation of three genes of the original dataframe}
+JE_K5_RNA_table_t <- as.data.frame(JE_K5_RNA_table_t)
+ggplot(JE_K5_RNA_table_t) +
+  geom_point(aes(Krt5, Krt14, color=Trp63)) +
+  scale_color_viridis(option="B")
+
+```
+
+## 4.2 Visualizing MAGIC values with PHATE
+In complex systems, two dimensions of PCA are not sufficient to view the entire space. For this, PHATE is a suitable visualization tool which works hand in hand with MAGIC to view how gene expression evolves along a trajectory. For this, you will need to have installed PHATE. For help using PHATE, visit https://phate.readthedocs.io/.
+```{r, phate dimension reduction}
+JE_K5_MAGIC_PHATE <- phate(JE_K5_MAGIC_RNA_table_t, knn=4, decay=100, t=20)
+```
+
+```{r}
+phate_cord <- as.data.frame(JE_K5_MAGIC_PHATE[["embedding"]])
+head(phate_cord)
+phate_cord$cellID <- rownames(phate_cord)
+head(phate_cord)
+
+```
+
+
+```{r}
+gene_exp <- as.data.frame(JE_K5_MAGIC_RNA_table_t)
+gene_exp$cellID <- rownames(gene_exp)
+gene_cord_exp <- merge(phate_cord, gene_exp, by=c("cellID"))
+```
+
+```{r,phate with Krt14}
+ggplot(gene_cord_exp) +
+  geom_point(aes(x=gene_cord_exp$PHATE1, y=gene_cord_exp$PHATE2, color=gene_cord_exp$Krt14)) +
+  scale_color_viridis(option="B") +
+  labs(color="Krt14")
+```
+
+```{r, phate with Krt5}
+ggplot(gene_cord_exp) +
+  geom_point(aes(x=gene_cord_exp$PHATE1, y=gene_cord_exp$PHATE2, color=gene_cord_exp$Krt5)) +
+  scale_color_viridis(option="B") +
+  labs(color="Krt5")
+```
+```{r, phate with Trp63}
+ggplot(gene_cord_exp) +
+  geom_point(aes(x=gene_cord_exp$PHATE1, y=gene_cord_exp$PHATE2, color=gene_cord_exp$Trp63)) +
+  scale_color_viridis(option="B") +
+  labs(color="Trp63")
+```
+```{r, phate with Odam}
+ggplot(gene_cord_exp) +
+  geom_point(aes(x=gene_cord_exp$PHATE1, y=gene_cord_exp$PHATE2, color=gene_cord_exp$Odam)) +
+  scale_color_viridis(option="B") +
+  labs(color="Odam")
+```
+
+```{r,save phate and magic}
+saveRDS(JE_K5_MAGIC_PHATE, file = "./SeuratObject/JE_K5_MAGIC_PHATE_harmony_20240604.rds")
+saveRDS(JE_K5_MAGIC, file = "./SeuratObject/JE_K5_harmony_MAGIC_20240710.rds")
+```
+
+```{r}
+gc()
+rm(list=ls())
+```
+
+
+
+
+
+# 6 Visuliaztion
+
+
+```{r}
+gc()
+rm(list=ls())
+```
+
+
+```{r, load of packages and setup of the environment for visualization}
+gc()
+rm(list=ls())
+library(reticulate)
+use_condaenv("MAGIC", required = TRUE)
+library(Seurat)
+library(SeuratWrappers)
+library(sctransform)
+library(harmony)
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(ggpointdensity)
+library(monocle3)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(cowplot)
+library(clustree)
+library(gridExtra)
+library(phateR)
+library(viridis)
+library(readr)
+library(Rmagic)
+
+
+
+set.seed(12)
+theme_set(theme_bw())
+
+JE_K5 <- readRDS(file = "./SeuratObject/JE_K5_celltype_with_epi_20240205.rds")
+JE_K5_MAGIC_PHATE <-readRDS(file = "./SeuratObject/JE_K5_MAGIC_PHATE_harmony_20240604.rds")
+JE_K5_MAGIC <- readRDS(file = "./SeuratObject/JE_K5_harmony_MAGIC_20240710.rds")
+```
+## 6.1 Featureplot
+
+## 6.1.1 Whole
+1) GFP lor odam
+```{r,GFP lor odam whole,fig.width=15,fig.height=15}
+FeaturePlot(JE_K5, 
+                  features = c("GFP","Lor","Odam"),
+                  cols = c("grey85", brewer.pal(9,"YlOrRd")),
+                  ncol=2, 
+                  pt.size = 0.1,
+                  min.cutoff = 0.1,
+                  max.cutoff =5,
+            label=T,repel = T)
+ggsave("./OutputFigure/JE_K5_epi_GFP_Lor_Odam.pdf")
+```
+```{r,GFP lor odam whole magic,fig.width=15,fig.height=15}
+DefaultAssay(JE_K5_MAGIC) <- "MAGIC_SCT"
+FeaturePlot(JE_K5_MAGIC, 
+                  features = c("GFP","Lor","Odam"),
+                  cols = c("grey85", brewer.pal(9,"YlOrRd")),
+                  ncol=2, 
+                  pt.size = 0.1,
+                  min.cutoff = 0.1,
+                  max.cutoff =5,
+            label=T,repel = T)
+ggsave("./OutputFigure/JE_K5_MAGIC_GFP_Lor_Odam.pdf")
+```
+
+
+
+## 6.1.2 Seperate
+```{r,GFP lor odam whole,fig.width=30,fig.height=20}
+FeaturePlot(JE_K5, 
+                  features = c("GFP","Lor","Odam"),
+                  cols = c("grey85", brewer.pal(9,"YlOrRd")),
+                  ncol=2, split.by  = "orig.ident",
+                  pt.size = 0.1,
+                  min.cutoff = 0.1,
+                  max.cutoff =5,
+            label=T,repel = T)
+ggsave("./OutputFigure/JE_K5_epi_GFP_Lor_Odam_split.pdf")
+```
+```{r,GFP lor odam split MAGIC,fig.width=25,fig.height=27}
+DefaultAssay(JE_K5_MAGIC) <- "MAGIC_SCT"
+FeaturePlot(JE_K5_MAGIC, 
+                  features = c("GFP","Krt5","Lor","Odam"),
+                  cols = c("grey85", brewer.pal(9,"YlOrRd")),
+                  ncol=2, split.by  = "orig.ident",
+                  pt.size = 0.1,
+                  min.cutoff = 1,
+                  max.cutoff =5,
+            label=T,repel = T)
+ggsave("./OutputFigure/JE_K5_MAGIC_GFP_Krt5_Lor_Odam_split_1.pdf")
+```
+```{r,GFP lor odam split MAGIC,fig.width=25,fig.height=27}
+DefaultAssay(JE_K5_MAGIC) <- "MAGIC_SCT"
+FeaturePlot(JE_K5_MAGIC, 
+                  features = c("GFP","Krt5","Lor","Odam"),
+                  cols = c("grey85", brewer.pal(9,"YlOrRd")),
+                  ncol=2, split.by  = "orig.ident",
+                  pt.size = 0.1,
+                  min.cutoff = 0.1,
+                  max.cutoff =5,
+            label=T,repel = T)
+ggsave("./OutputFigure/JE_K5_MAGIC_GFP_Krt5_Lor_Odam_split_0.1.pdf")
+```
+
+
+

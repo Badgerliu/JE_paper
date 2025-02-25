@@ -1,0 +1,623 @@
+---
+title: "Figure_2_plots"
+author: "Huan Liu"
+date: "2024-07-03"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  tidy = TRUE,
+  eval = FALSE,
+  tidy.opts = list(width.cutoff = 120),
+  message = TRUE,
+  warning = FALSE,
+  cache = TRUE,
+  label.duplicate = "append"
+)
+
+```
+
+# 1 Load packages and datasets
+
+```{r,load of packages and setup of the environment 1}
+gc()
+rm(list=ls())
+library(Seurat)
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(slingshot)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(cowplot)
+library(gridExtra)
+library(viridis)
+library(readr)
+library(Hmisc)
+library(ggpubr)
+library(rsample)
+library(tidymodels)
+library(scales)
+library(tradeSeq)
+library(pheatmap)
+library(scCustomize)
+library(destiny)
+library(plot3D)
+library(rgl)
+library(RColorBrewer)
+
+source("./diffprop_functions.R")
+
+set.seed(12)
+theme_set(theme_bw())
+
+load(file = "./Figure2_scRNA_part/Figure2_scRNA_part.Rdata")
+
+#sce <-readRDS(file = "./SeuratObject/JE_combined_epi_harmony_SCT_renamed_slingshot.rds")
+#JE_combined_epi <-readRDS(file = "./SeuratObject/JE_combined_epi_harmony_MAGIC_renamed.rds")
+
+#JE_K5 <- readRDS(file = "./SeuratObject/JE_K5_harmony_celltype_20240708.rds")
+#JE_K5_epi <- readRDS(file = "./SeuratObject/JE_K5_epi_MAGIC_harmony_renamed.rds")
+#JE_K5_MAGIC <- readRDS(file = "./SeuratObject/JE_K5_harmony_MAGIC_20240710.rds")
+
+
+```
+
+#2 Figure 2B Diffusion map
+From our previous notebook using scVelo, we identified GE1 as the start, with GE3, GE4 and GE7 as end points.
+##2.1 Slingshot
+```{r, generate slingshot object}
+DefaultAssay(JE_combined_epi) <- c("SCT")
+JE_combined_epi_sce  <- slingshot(JE_combined_epi, clusterLabels = JE_combined_epi$ident, reducedDim = 'UMAP',
+                  start.clus = c("GE1"), 
+                  end.clus = c("GE3", "GE4", "GE7"),
+                  approx_points = 150)               
+```
+You may use our previous color apporoach using `cb_palette`.
+
+```{r, check slingshot object}
+SlingshotDataSet(JE_combined_epi_sce)
+plot(reducedDims(JE_combined_epi_sce)$UMAP,  col =cb_palette[JE_combined_epi_sce$celltype], pch=16, asp = 1, cex=0.2, label = T)                       
+lines(SlingshotDataSet(JE_combined_epi_sce), lwd=2, type = 'lineage', col='black')
+```
+
+## 2.2 Probing with Diffusion map
+In order to probe for the best routes of trajectories, we employed diffusion map.
+
+```{r, set basic parameters for diffusion map}
+library(destiny)
+
+curve(find_dm_k(n), 0, 5624, xname = 'n')
+my_color<-cb_palette
+names(my_color) <- levels(JE_combined_epi)
+set.seed(123)
+find_sigmas(JE_combined_epi_sce@int_colData@listData[["reducedDims"]]@listData[["HARMONY"]])
+```
+
+```{r, modify function for probeing and ploting}
+
+run_diffMap <- function(data=data, condition=condition,sigma="local", k = 20)
+  {
+  destinyObj <- as.ExpressionSet(as.data.frame(t(data))) 
+  destinyObj$condition <- factor(condition) 
+  dm <- DiffusionMap(destinyObj, sigma, k) 
+  return(dm)
+
+}
+
+plot_eigenVal <- function(dm=dm){ 
+  linepad <- .5 
+  plot( 
+    eigenvalues(dm), 
+    ylim = 0:1,
+    pch = 20,
+    xlab ='Diffusion component (DC)', 
+    ylab ='Eigenvalue'
+  )
+}
+
+plot_dm_3D <- function(dm=dm, dc=c(1:3), condition=condition, colours=colours, size=0.5, legend = NULL){
+  cond <- factor(condition) 
+  col <- factor(condition) 
+  levels(col) <- colours 
+  col <- as.vector(col) 
+  DCs <- paste("DC",dc, sep="")
+  data <- data.frame(
+    dm@eigenvectors[,DCs[1]], 
+    dm@eigenvectors[,DCs[2]], 
+    dm@eigenvectors[,DCs[3]] 
+    ) 
+  colnames(data) <- DCs
+  plot3d( 
+    data, 
+    bg=col, 
+    col=col, 
+    size=size, 
+    box = FALSE 
+    )
+  if (is.null(legend)==FALSE){ 
+    legend3d("topright", legend = unique(condition), pch = 21, pt.bg = unique(col), cex=1.5, inset=c(0.02), bty = "n") 
+     }
+}
+
+plot_dm_3D_in_2D <- function(dm=dm, dc=c(1:3), condition=condition, colours=colours, outline.color = "grey20", size=1, pch = 21, theta = 40, phi = 40, bty ="b"){
+  cond <- factor(condition) 
+  cols <- factor(condition) 
+  levels(cols) <- colours 
+  cols <- as.vector(cols) 
+  DCs <- paste("DC",dc, sep="")
+  data <- data.frame( 
+    dm@eigenvectors[,DCs[1]], 
+    dm@eigenvectors[,DCs[2]], 
+    dm@eigenvectors[,DCs[3]]
+    )
+  colnames(data) <- DCs
+  if(pch == 21){
+    scatter3D(x=as.matrix(data[,DCs[1]]),
+              y=as.matrix(data[,DCs[2]]), 
+              z=as.matrix(data[,DCs[3]]),
+              bg = cols,
+              col = outline.color, 
+              pch=pch,
+              cex = size,
+              xlab = DCs[1],
+              ylab = DCs[2],
+              zlab = DCs[3],
+              theta =theta, phi = phi, bty = bty)
+    } else {
+      scatter3D(x=as.matrix(data[,DCs[1]]),
+                y=as.matrix(data[,DCs[2]]), 
+                z=as.matrix(data[,DCs[3]]),
+                colvar =as.numeric(factor(condition)), col = colours,
+                pch=pch, cex = size,
+                xlab = DCs[1],
+                ylab = DCs[2],
+                zlab = DCs[3],
+                theta =theta,
+                phi = phi,
+                bty = bty)
+    }
+}
+
+
+plot_dm_3D_in_2D_2 <- function(dm, dc=c(1:3), condition, colours, outline.color = "grey20", size=1, pch = 21, theta = 40, phi = 40, bty ="b", alpha=1){
+  
+  cond <- factor(condition) 
+  cols <- factor(condition) 
+  levels(cols) <- colours 
+  cols <- as.vector(cols) 
+  
+  # Adjust colors for transparency
+  cols <- grDevices::adjustcolor(cols, alpha=alpha)
+  outline.color <- grDevices::adjustcolor(outline.color, alpha=alpha)
+  colours <- grDevices::adjustcolor(colours, alpha=alpha)
+  
+  DCs <- paste("DC",dc, sep="")
+  data <- data.frame( 
+    dm@eigenvectors[,DCs[1]], 
+    dm@eigenvectors[,DCs[2]], 
+    dm@eigenvectors[,DCs[3]]
+  )
+  colnames(data) <- DCs
+  
+  if(pch == 21){
+    scatter3D(x=as.matrix(data[,DCs[1]]),
+              y=as.matrix(data[,DCs[2]]), 
+              z=as.matrix(data[,DCs[3]]),
+              bg = cols,
+              col = outline.color, 
+              pch=pch,
+              cex = size,
+              xlab = DCs[1],
+              ylab = DCs[2],
+              zlab = DCs[3],
+              theta = theta, phi = phi, bty = bty)
+  } else {
+    scatter3D(x=as.matrix(data[,DCs[1]]),
+              y=as.matrix(data[,DCs[2]]), 
+              z=as.matrix(data[,DCs[3]]),
+              colvar = as.numeric(factor(condition)), col = colours,
+              pch=pch, cex = size,
+              xlab = DCs[1],
+              ylab = DCs[2],
+              zlab = DCs[3],
+              theta = theta,
+              phi = phi,
+              bty = bty)
+  }
+}
+
+
+
+get_pJE_combined_epidotime <- function(pJE_combined_epidotime, wthres=wthres){
+    pJE_combined_epidoT <- list()
+    for(lineage in 1:length(pJE_combined_epidotime@metadata[["curves"]]))local({
+        curve <- pJE_combined_epidotime@metadata[["curves"]][[lineage]]
+        lambda <- curve$lambda
+        weight <- curve$w
+        ps <- curve$lambda
+        ps[weight < wthres] <- NA
+        ps <- rankKeepNA(ps)
+        pJE_combined_epidoT[[lineage]] <<- ps
+    })
+    df <- t(do.call("rbind",pJE_combined_epidoT))
+    colnames(df) <- names(pJE_combined_epidotime@metadata[["curves"]])
+    return(df)
+}
+
+```
+
+
+```{r, gernate diffusion map}
+JE_combined_epi_sce_dm <- run_diffMap(t(JE_combined_epi@reductions$harmony@cell.embeddings), colData(JE_combined_epi_sce)$ident, sigma = 29.8, k = 1000) 
+plot_eigenVal(dm = JE_combined_epi_sce_dm)
+```
+
+```{r, regernate slingshot using different eigenvectors}
+JE_combined_epi_sce_lineage <- slingshot(JE_combined_epi_sce_dm@eigenvectors[,c(1:4)], clusterLabels =factor(colData(JE_combined_epi_sce)$ident), 
+                         start.clus = 'GE1',
+                         end.clus = c("GE3", "GE4", "GE7"),
+                         allow.breaks=FALSE, maxit = 1000, shrink.method ="density", thresh = 0.001, extend = "n")
+```
+
+```{r, check slingshot objects generated using diffusion map}
+SlingshotDataSet(JE_combined_epi_sce_lineage)
+```
+
+
+```{r, check diffusion map in different dimension, fig.height=20, fig.width=20}
+splom(~JE_combined_epi_sce_dm@eigenvectors[, 1:5], groups =JE_combined_epi_sce$ident, col = my_color, main ="JE_combined_epi_sce_lineage",key = list(space="right", 
+                                                                                                      points = list(pch = 19, col =my_color), 
+                                                                                                      text = list(c(levels(JE_combined_epi_sce$ident)))))
+
+ggsave(filename = "Figure2_scRNA_part/splom_dm_JE_combined_epi_sce_dm.png")
+```
+Since the end points are GE3, GE4 and GE7, we chose dc1, dc2 and dc3
+```{r,plot 3d version of dm}
+plot_dm_3D(dm = JE_combined_epi_sce_dm, dc = c(1,2,3), condition = JE_combined_epi@active.ident, colour = my_color, size = 3) 
+rglwidget()
+rgl.snapshot('./Figure2_scRNA_part/Figure2B_3dplot.png', fmt = "png") # this is not working. Thus, after adjusting the angles, I save the rgl plot into PNG, and modifed in Adobe illustrator.
+```
+
+
+#3 Figure2C Krt14 and Krt5 smooth plot
+
+```{r}
+curvesCols <- c("#619CFF", "transparent","#00BA38","transparent")
+plotSmoothers(sce.trade, counts, "Krt14", curvesCols = curvesCols,size=1/10,
+              border = FALSE) +  xlim(0,15) +ylim(0,6)+
+  scale_color_manual(values = curvesCols)
+ggsave("./Figure2_scRNA_part/Plot_Krt14_lineage1vs3.pdf",  width = 15, height = 5)
+```
+
+```{r}
+curvesCols <- c("#619CFF", "transparent","#00BA38","transparent")
+plotSmoothers(sce.trade, counts, "Krt5", curvesCols = curvesCols,size=1/10,
+              border = FALSE) + xlim(0,15) +ylim(0,6)+
+  scale_color_manual(values = curvesCols)
+ggsave("./Figure2_scRNA_part/Plot_Krt5_lineage1vs3.pdf",  width = 15, height = 5)
+```
+#4 Summary of JE_K5
+
+## 4.1 UMAP for celltype
+```{r, initial plots}
+Idents(JE_K5_MAGIC) <- JE_K5_MAGIC$celltype
+#group_by_cluster
+plot1 = DimPlot(JE_K5_MAGIC, reduction = "umap", pt.size=0.01, label = T, repel=T)
+# group_by_sample
+plot2 = DimPlot(JE_K5_MAGIC, reduction = "umap", pt.size=0.01, group.by = "orig.ident")
+plot3 = DimPlot(JE_K5_MAGIC, reduction = "umap", pt.size=0.01, label = T, split.by  = "orig.ident")
+# combine
+plotc <- plot1 + plot2
+ggsave("./Figure2_scRNA_part/JE_K5_MAGIC_umap.pdf", plot = plotc, width = 20, height = 10)
+plot3
+ggsave("./Figure2_scRNA_part/JE_K5_MAGIC_umap_split.pdf", plot = plot3, width = 24, height = 10)
+
+DimPlot(JE_K5_MAGIC, reduction = "umap", pt.size=0.01, label = T)
+DimPlot(JE_K5_MAGIC, reduction = "umap", pt.size=0.01, label = T,group.by = "orig.ident")
+
+```
+## 4.2 Dotplot for marker genes in JE_1st
+```{r, setup gene list}
+#markers refer to https://www.ncbi.nlm.nih.gov/pmc/articles/PMC7359078/ and marker genes in each cluster
+genes_to_check <- c("Col1a1", "Postn","Nfia", #Dermal
+                    "Epcam","Krt14","Krt24","Krt5","Mki67","Krtdap","Atf3",  #Epithelium
+                    "Ccl3","Cxcl2", #Macrophage
+                    "Lyz2","Cd74", #Monocyte
+                    "Plvap","Egfl7",#Endothelial cell
+                    "Icos","Cxcr6", #T cell
+                    "Mpz","Plp1", #Glial cell
+                    "Rgs5","Myh11", #Pericyte,
+                    "Ccl21a","Mmrn1", #Lymphatic endothelial cell
+                    "Hbb-bt","Hba-a1", #Erythroid cell
+                    "Cd79a","Cd79b" #B cell
+                             )
+```
+
+```{r,dotplot for marker genes}
+
+# Define the desired order for celltype
+desired_order <- c("Fibroblast","Basal","Cycling","Intermidate","Keratinocyte","JE","Macrophage","Monocyte",
+                   "Endothelial cell","T Cell", "Glial cell","Pericyte","Lymphatic Vessel","B cell")
+desired_order <- rev(desired_order)
+
+# Set the identities in the Seurat object to celltype
+JE_K5$celltype <- factor(JE_K5$celltype, levels = desired_order)
+Idents(JE_K5) <- JE_K5$celltype
+
+# Generate the dot plot
+DotPlot(JE_K5, features = unique(genes_to_check)) +
+  theme_bw() +
+  theme(panel.grid = element_blank(), 
+        axis.text.x = element_text(angle = 45, hjust = 0.5, vjust = 0.5),
+        panel.border = element_blank(),
+        axis.line.x = element_line(color = "black"),
+        axis.line.y = element_blank()) +
+  labs(x = NULL, y = NULL) + 
+  guides(size = guide_legend(order = 3)) +
+  scale_color_gradientn(values = seq(0, 1, 0.2), colours = c('#295B9F', '#FFFFFF', '#D23B3E'))
+
+# Save the dot plot
+ggsave("./Figure2_scRNA_part/JE_K5_harmony_dotplot_feature.pdf", width = 8.5, height = 5)
+```
+
+
+## 4.3 Celltype percentage display
+```{r}
+# Load necessary libraries
+library(Seurat)
+library(data.table)
+library(ggplot2)
+library(reshape2)
+library(dplyr)
+
+# Extract meta data
+md <- JE_K5_MAGIC@meta.data %>% as.data.table
+md  # The resulting md object has one "row" per cell
+
+# Count the number of cells per unique combinations of "orig.ident" and "celltype"
+cell_counts <- md[, .N, by = c("orig.ident", "celltype")]
+
+# Cast the data from long to wide format
+split_count <- dcast(cell_counts, orig.ident ~ celltype, value.var = "N", fill = 0)
+
+# Melt the data back to long format for ggplot2
+split_count_melt <- melt(split_count, id.vars = "orig.ident", variable.name = "celltype", value.name = "Number")
+
+# Save the cell count data to a CSV file
+write.csv(split_count_melt, file = "./Figure2_scRNA_part/JE_K5_MAGIC_harmony_cell_number_celltype.csv", row.names = FALSE)
+
+# Define the desired order for celltype
+desired_order <- c("Fibroblast","Basal","Cycling","Intermidate","Keratinocyte","JE","Macrophage","Monocyte",
+                   "Endothelial cell","T Cell", "Glial cell","Pericyte","Lymphatic Vessel","B cell")
+
+
+# Convert celltype to factor with the desired order
+split_count_melt$celltype <- factor(split_count_melt$celltype, levels = desired_order)
+
+# Generate a stacked bar plot with a white theme and black border for unnormalized data
+ggplot(split_count_melt, aes(fill = orig.ident, x = celltype, y = Number)) +
+  geom_bar(position = "fill", stat = "identity") +
+  ggtitle("Percentage of cells in each cluster") +
+  xlab("celltype") +
+  ylab("Percentage of cells") +
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5),axis.text.x = element_text(angle = 45, hjust = 0.5, vjust = 0.5),
+        panel.border = element_rect(color = "black", fill = NA, size = 0.5))
+
+ggsave("./Figure2_scRNA_part/JE_K5_MAGIC_harmony_Percentage_cell_in_each_celltype_unnormalized.pdf", height = 3, width = 7.5)
+
+# Normalize cell counts to the total number in each sample
+split_count$total <- rowSums(split_count[, -1])
+
+# Calculate the percentage for each cluster
+split_count_percent <- split_count %>%
+  mutate(across(-c(orig.ident, total), ~ . / total * 100, .names = "{.col}_percent"))
+
+# Reshape data for ggplot2
+split_count_percent_melt <- melt(split_count_percent, id.vars = "orig.ident", 
+                                 variable.name = "celltype", 
+                                 value.name = "Percentage",
+                                 measure.vars = grep("_percent$", names(split_count_percent), value = TRUE))
+
+# Remove "_percent" from celltype
+split_count_percent_melt$celltype <- gsub("_percent", "", split_count_percent_melt$celltype)
+
+# Filter out rows with NA in celltype
+split_count_percent_melt <- split_count_percent_melt[!is.na(split_count_percent_melt$celltype), ]
+
+# Convert celltype to factor with the desired order
+split_count_percent_melt$celltype <- factor(split_count_percent_melt$celltype, levels = desired_order)
+
+# Save the percentage data to a CSV file
+write.csv(split_count_percent_melt, file = "./Figure2_scRNA_part/JE_K5_MAGIC_harmony_cell_percentage_celltype.csv", row.names = FALSE)
+
+# Generate a stacked bar plot with a white theme and black border for normalized data
+ggplot(split_count_percent_melt, aes(fill = orig.ident, x = celltype, y = Percentage)) +
+  geom_bar(position = "fill", stat = "identity") +
+  ggtitle("Percentage of cells in each celltype") +
+  xlab("celltype") +
+  ylab("Percentage of cells") +
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5),axis.text.x = element_text(angle = 45, hjust = 0.5, vjust = 0.5),
+        panel.border = element_rect(color = "black", fill = NA, size = 1))
+
+ggsave("./Figure2_scRNA_part/JE_K5_MAGIC_harmony_Percentage_cell_in_each_celltype_normalized.pdf", height = 3, width = 7.5)
+
+# Generate a stacked bar plot for percentage of cells (alternative layout)
+ggplot(split_count_percent_melt, aes(x = celltype, y = Percentage)) +
+  geom_col(aes(fill = orig.ident), color = "black") + 
+  theme_bw() + 
+  theme(panel.grid = element_blank(),axis.text.x = element_text(angle = 45, hjust = 0.5, vjust = 0.5))
+ggsave("./Figure2_scRNA_part/JE_K5_MAGIC_harmony_Percentage_cell_in_each_celltype_normalized_stack.pdf", height = 3, width = 7.5)
+
+# Generate a dodged bar plot for percentage of cells
+ggplot(split_count_percent_melt, aes(x = celltype, y = Percentage)) +
+  geom_col(aes(fill = orig.ident), color = "black", position = "dodge") + 
+  theme_bw() + 
+  theme(panel.grid = element_blank(),axis.text.x = element_text(angle = 45, hjust = 0.5, vjust = 0.5))
+ggsave("./Figure2_scRNA_part/JE_K5_MAGIC_harmony_Percentage_cell_in_each_celltype_normalized_dodge.pdf", height = 3, width = 7.5)
+
+```
+## 4.4 Heatmap for celltype percentage in each sample
+```{r}
+# Load necessary libraries
+library(ggplot2)
+library(reshape2)
+library(data.table)
+library(dplyr)
+
+# Define the desired order for celltype
+desired_order <- c("Fibroblast","Basal","Cycling","Intermidate","Keratinocyte","JE","Macrophage","Monocyte",
+                   "Endothelial cell","T Cell", "Glial cell","Pericyte","Lymphatic Vessel","B cell")
+                   
+desired_order <- rev(desired_order)
+
+
+
+# Extract meta data
+md <- JE_K5_MAGIC@meta.data %>% as.data.table
+md  # The resulting md object has one "row" per cell
+
+# Count the number of cells per unique combinations of "orig.ident" and "celltype"
+cell_counts <- md[, .N, by = c("orig.ident", "celltype")]
+
+# Calculate the total number of cells in each sample (orig.ident)
+cell_totals <- cell_counts[, .(total = sum(N)), by = orig.ident]
+
+# Merge the total counts with the cell counts
+cell_counts <- merge(cell_counts, cell_totals, by = "orig.ident")
+
+# Calculate the percentage of cells in each celltype within each orig.ident
+cell_counts[, Percentage := (N / total) * 100]
+
+# Convert celltype to factor with the desired order
+cell_counts$celltype <- factor(cell_counts$celltype, levels = desired_order)
+
+# Generate the heatmap plot
+ggplot(cell_counts, aes(x = orig.ident, y = celltype, fill = Percentage)) +
+  geom_tile(color = NA) + # Remove the color outline in each tile
+  geom_text(aes(label = sprintf("%.1f", Percentage)), color = "black", size = 3) +
+  scale_fill_gradient2(low = "#0AC94E", mid = "#FFEEA6", high = "#DD4D46", midpoint = 20, limits = c(0, 40)) +
+  labs(title = "Percentage of celltype in each sample",
+       x = "Sample Day", y = "Cluster Renamed") +
+  theme_minimal() +
+  theme(panel.grid = element_blank(),
+        plot.title = element_text(hjust = 0.5),
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        panel.border = element_rect(color = "black", fill = NA, size = 1))
+
+# Save the heatmap plot
+ggsave("./Figure2_scRNA_part/JE_K5_MAGIC_harmony_heatmap_cell_proportion.pdf", height = 5, width = 7)
+
+```
+
+
+# 5 Feature plot
+## 5.1 Whole
+1) GFP lor odam
+```{r,GFP lor odam whole,fig.width=15,fig.height=15}
+FeaturePlot(JE_K5, 
+                  features = c("GFP","Lor","Odam"),
+                  cols = c("grey85", brewer.pal(9,"YlOrRd")),
+                  ncol=2, 
+                  pt.size = 0.1,
+                  min.cutoff = 0.1,
+                  max.cutoff =5,
+            label=T,repel = T)
+ggsave("./Figure2_scRNA_part/JE_K5_GFP_Lor_Odam.pdf")
+```
+```{r,GFP lor odam whole magic,fig.width=15,fig.height=15}
+DefaultAssay(JE_K5_MAGIC) <- "MAGIC_SCT"
+FeaturePlot(JE_K5_MAGIC, 
+                  features = c("GFP","Lor","Odam"),
+                  cols = c("grey85", brewer.pal(9,"YlOrRd")),
+                  ncol=2, 
+                  pt.size = 0.1,
+                  min.cutoff = 0.1,
+                  max.cutoff =5,
+            label=T,repel = T)
+ggsave("./Figure2_scRNA_part/JE_K5_MAGIC_GFP_Lor_Odam.pdf")
+```
+
+
+
+##5.2 Seperate
+
+```{r,GFP lor odam split MAGIC,fig.width=25,fig.height=27}
+DefaultAssay(JE_K5_MAGIC) <- "MAGIC_SCT"
+FeaturePlot(JE_K5_MAGIC, 
+                  features = c("GFP","Krt5","Lor","Odam"),
+                  cols = c("grey85", brewer.pal(9,"YlOrRd")),
+                  ncol=2, split.by  = "orig.ident",
+                  pt.size = 0.1,
+                  min.cutoff = 1,
+                  max.cutoff =5,
+            label=T,repel = T)
+ggsave("./Figure2_scRNA_part/JE_K5_MAGIC_GFP_Krt5_Lor_Odam_split_1.pdf")
+```
+```{r,GFP lor odam split MAGIC,fig.width=25,fig.height=27}
+DefaultAssay(JE_K5_MAGIC) <- "MAGIC_SCT"
+FeaturePlot(JE_K5_MAGIC, 
+                  features = c("GFP","Krt5","Lor","Odam"),
+                  cols = c("grey85", brewer.pal(9,"YlOrRd")),
+                  ncol=2, split.by  = "orig.ident",
+                  pt.size = 0.1,
+                  min.cutoff = 0.1,
+                  max.cutoff =5,
+            label=T,repel = T)
+ggsave("./Figure2_scRNA_part/JE_K5_MAGIC_GFP_Krt5_Lor_Odam_split_0.1.pdf")
+```
+
+#6 GFP percentage in epi 
+Here we use violin plot to show GFP+ cells distribution in different celltype between D0 and D5
+```{r}
+
+JE_K5_epi_D0_D5 <- subset(JE_K5_epi, orig.ident !="JE_K5_D3") 
+```
+
+
+
+```{r}
+Idents(JE_K5_epi_D0_D5) <- "celltype"
+custom_col = c("#F8766D", "#00BA38")
+VlnPlot(JE_K5_epi_D0_D5, 
+        features = c("GFP"),
+        pt.size = 0,
+        ncol = 1,split.by = "orig.ident",
+        cols = custom_col)
+ggsave("./Figure2_scRNA_part/JE_K5_epi_D0_D5_GFP_vlnplot.pdf", height = 4, width = 7)
+```
+
+
+
+
+
+
+
+
+
+
+#X save Rdata
+
+```{r}
+save(JE_combined, #seurat object fro combined with celltype information
+     JE_combined_epi, #seurat object for combined_epi with celltype informationsce_dm, #sce in diffusion map
+     JE_K5, # JE_K5 merged data
+     JE_K5_epi,# JE_K5_epi population imputated with MAGIC 
+     JE_K5_MAGIC, #JE_K5 imputation
+     sce, #JE_combined_epi slingshot object
+     counts, # count matrix derived from sce
+     sce.trade, #sce fitGAM
+
+     file = "./Figure2_scRNA_part/Figure2_scRNA_part.Rdata")
+```
+
+# Before shut down Rserver
+```{r}
+gc()
+rm(list=ls())
+```
+

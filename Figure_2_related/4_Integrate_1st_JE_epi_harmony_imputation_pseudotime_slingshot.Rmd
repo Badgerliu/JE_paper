@@ -1,0 +1,863 @@
+---
+title: "Mouse JE repair scRNA harmony epi imputation pseudotime with slingshot with diffusion map approach"
+author: "Huan"
+date: "1/4/2024"
+output: html_document
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  tidy = TRUE,
+  eval = FALSE,
+  tidy.opts = list(width.cutoff = 120),
+  message = TRUE,
+  warning = FALSE,
+  cache = TRUE,
+  label.duplicate = "append"
+)
+
+```
+
+This note was used for pseudotime imputation using
+`JE_combined_epi_harmony_MAGIC_renamed.rds`. We will also work with the
+two main paths `JE_combined_epi_MAGIC_GE7_20221128.rds` and
+`JE_combined_epi_MAGIC_GE4_20221128.rds` We employed the following
+approaches: slingshot Root cells were determined using scVelo generated
+from
+`Working with scVelo for integrated junctional epithelium (D0, D3 and D5) scRNA-seq (dynamic).ipynb`
+
+Here we will show how to transfer the embedding information generated
+from Seurat to monocle analysis
+
+# 1 Slingshot for scRNA data
+
+## 1.0 Load data and packages
+
+```{r,load of packages and setup of the environment 1}
+gc()
+rm(list=ls())
+library(Seurat)
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(slingshot)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(cowplot)
+library(gridExtra)
+library(viridis)
+library(readr)
+library(Hmisc)
+library(ggpubr)
+library(rsample)
+library(tidymodels)
+library(scales)
+library(tradeSeq)
+library(pheatmap)
+library(scCustomize)
+library(destiny)
+library(rgl)
+set.seed(12)
+theme_set(theme_bw())
+
+
+seu <- readRDS(file = "./SeuratObject/JE_combined_epi_harmony_MAGIC_renamed.rds")
+Idents(seu) <- c("celltype")
+DefaultAssay(seu) <- c("SCT")
+```
+
+
+```{r}
+seu
+```
+```{r}
+DimPlot(seu, label = T, pt.size = 1)+NoLegend()
+```
+
+
+
+refer to
+`https://bustools.github.io/BUS_notebooks_R/slingshot.html#introduction`
+Unfortunately, slingshot does not natively support ggplot2. So this is a
+function that assigns colors to each cell in base R graphics.
+
+```{r}
+#' Assign a color to each cell based on some value
+#' 
+#' @param cell_vars Vector indicating the value of a variable associated with cells.
+#' @param pal_fun Palette function that returns a vector of hex colors, whose
+#' argument is the length of such a vector.
+#' @param ... Extra arguments for pal_fun.
+#' @return A vector of hex colors with one entry for each cell.
+cell_pal <- function(cell_vars, pal_fun,...) {
+  if (is.numeric(cell_vars)) {
+    pal <- pal_fun(100, ...)
+    return(pal[cut(cell_vars, breaks = 100)])
+  } else {
+    categories <- sort(unique(cell_vars))
+    pal <- setNames(pal_fun(length(categories), ...), categories)
+    return(pal[cell_vars])
+  }
+}
+```
+
+```{r}
+cell_colors <- cell_pal(seu$celltype, brewer_pal("qual", "Set2"))
+```
+
+```{r}
+cb_palette <- c("#F8766D", #GE1
+                "#D39200", #GE2
+                "#93AA00", #GE3
+                "#00BA38", #GE4
+                "#00C19F", #GE5
+                "#00B9E3", #GE6
+                "#619CFF", #GE7
+                "#DB72FB", #GE8
+                "#FF61C3" #GE9
+                )
+```
+
+## 1.1 Generate slingshot object using seurat
+
+```{r}
+seu.sc <- as.SingleCellExperiment(seu)
+table(seu.sc$ident)
+
+```
+
+```{r}
+save(seu.sc, #intitial sce object after conversion
+     cell_colors, # default color
+     cb_palette, ##  color for different assigned celltype
+     file = "./SeuratObject/JE_combined_epi_harmony_SCT_renamed_renamed_sce.Rdata")
+```
+
+
+Resume
+```{r}
+gc()
+rm(list=ls())
+library(Seurat)
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(slingshot)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(cowplot)
+library(gridExtra)
+library(viridis)
+library(readr)
+library(Hmisc)
+library(ggpubr)
+library(rsample)
+library(tidymodels)
+library(scales)
+library(tradeSeq)
+library(pheatmap)
+library(scCustomize)
+library(destiny)
+library(plot3D)
+library(rgl)
+set.seed(12)
+theme_set(theme_bw())
+
+load(file = "./SeuratObject/JE_combined_epi_harmony_SCT_renamed_renamed_sce.Rdata")
+seu <- readRDS(file = "./SeuratObject/JE_combined_epi_harmony_MAGIC_renamed.rds")
+```
+
+```{r}
+source("./PseudotimeAnalysis.r")
+```
+
+From our previous notebook using scVelo, we identified GE1 as the start, with GE3, GE4 and GE7 as end points.
+
+```{r}
+sce  <- slingshot(seu.sc, clusterLabels = seu.sc$ident, reducedDim = 'UMAP',
+                  start.clus = c("GE1"), 
+                  end.clus = c("GE3", "GE4", "GE7"),
+                  approx_points = 150)               
+```
+You may use our previous color apporoach using `cb_palette`.
+
+```{r}
+SlingshotDataSet(sce)
+plot(reducedDims(sce)$UMAP,  col =cb_palette[sce$celltype], pch=16, asp = 1, cex=0.2, label = T)                       
+lines(SlingshotDataSet(sce), lwd=2, type = 'lineage', col='black')
+```
+
+## 1.2 Probing with Diffusion map
+
+```{r}
+library(destiny)
+
+curve(find_dm_k(n), 0, 5624, xname = 'n')
+```
+```{r}
+set.seed(123)
+find_sigmas(sce@int_colData@listData[["reducedDims"]]@listData[["HARMONY"]])
+```
+```{r}
+
+run_diffMap <- function(data=data, condition=condition,sigma="local", k = 20)
+  {
+  destinyObj <- as.ExpressionSet(as.data.frame(t(data))) 
+  destinyObj$condition <- factor(condition) 
+  dm <- DiffusionMap(destinyObj, sigma, k) 
+  return(dm)
+
+}
+
+plot_eigenVal <- function(dm=dm){ 
+  linepad <- .5 
+  plot( 
+    eigenvalues(dm), 
+    ylim = 0:1,
+    pch = 20,
+    xlab ='Diffusion component (DC)', 
+    ylab ='Eigenvalue'
+  )
+}
+
+plot_dm_3D <- function(dm=dm, dc=c(1:3), condition=condition, colours=colours, size=0.5, legend = NULL){
+  cond <- factor(condition) 
+  col <- factor(condition) 
+  levels(col) <- colours 
+  col <- as.vector(col) 
+  DCs <- paste("DC",dc, sep="")
+  data <- data.frame(
+    dm@eigenvectors[,DCs[1]], 
+    dm@eigenvectors[,DCs[2]], 
+    dm@eigenvectors[,DCs[3]] 
+    ) 
+  colnames(data) <- DCs
+  plot3d( 
+    data, 
+    bg=col, 
+    col=col, 
+    size=size, 
+    box = FALSE 
+    )
+  if (is.null(legend)==FALSE){ 
+    legend3d("topright", legend = unique(condition), pch = 21, pt.bg = unique(col), cex=1.5, inset=c(0.02), bty = "n") 
+     }
+}
+
+plot_dm_3D_in_2D <- function(dm=dm, dc=c(1:3), condition=condition, colours=colours, outline.color = "grey20", size=1, pch = 21, theta = 40, phi = 40, bty ="b"){
+  cond <- factor(condition) 
+  cols <- factor(condition) 
+  levels(cols) <- colours 
+  cols <- as.vector(cols) 
+  DCs <- paste("DC",dc, sep="")
+  data <- data.frame( 
+    dm@eigenvectors[,DCs[1]], 
+    dm@eigenvectors[,DCs[2]], 
+    dm@eigenvectors[,DCs[3]]
+    )
+  colnames(data) <- DCs
+  if(pch == 21){
+    scatter3D(x=as.matrix(data[,DCs[1]]),
+              y=as.matrix(data[,DCs[2]]), 
+              z=as.matrix(data[,DCs[3]]),
+              bg = cols,
+              col = outline.color, 
+              pch=pch,
+              cex = size,
+              xlab = DCs[1],
+              ylab = DCs[2],
+              zlab = DCs[3],
+              theta =theta, phi = phi, bty = bty)
+    } else {
+      scatter3D(x=as.matrix(data[,DCs[1]]),
+                y=as.matrix(data[,DCs[2]]), 
+                z=as.matrix(data[,DCs[3]]),
+                colvar =as.numeric(factor(condition)), col = colours,
+                pch=pch, cex = size,
+                xlab = DCs[1],
+                ylab = DCs[2],
+                zlab = DCs[3],
+                theta =theta,
+                phi = phi,
+                bty = bty)
+    }
+}
+
+
+
+get_pseudotime <- function(pseudotime, wthres=wthres){
+    pseudoT <- list()
+    for(lineage in 1:length(pseudotime@metadata[["curves"]]))local({
+        curve <- pseudotime@metadata[["curves"]][[lineage]]
+        lambda <- curve$lambda
+        weight <- curve$w
+        ps <- curve$lambda
+        ps[weight < wthres] <- NA
+        ps <- rankKeepNA(ps)
+        pseudoT[[lineage]] <<- ps
+    })
+    df <- t(do.call("rbind",pseudoT))
+    colnames(df) <- names(pseudotime@metadata[["curves"]])
+    return(df)
+}
+
+```
+
+
+```{r}
+sce_dm <- run_diffMap(t(seu@reductions$harmony@cell.embeddings), colData(sce)$ident, sigma = 29.8, k = 1000) 
+plot_eigenVal(dm = sce_dm)
+```
+```{r, fig.height=20, fig.width=20}
+my_color<-cb_palette
+names(my_color) <- levels(seu)
+#plot.DiffusionMap(sce_dm,dims = 1:2,col_by = phenoData(dataset(sce_dm)))
+```
+```{r}
+sce_lineage <- slingshot(sce_dm@eigenvectors[,c(1:4)], clusterLabels =factor(colData(sce)$ident), 
+                         start.clus = 'GE1',
+                         end.clus = c("GE3", "GE4", "GE7"),
+                         allow.breaks=FALSE, maxit = 1000, shrink.method ="density", thresh = 0.001, extend = "n")
+```
+
+```{r}
+SlingshotDataSet(sce_lineage)
+```
+
+
+```{r, fig.height=20, fig.width=20}
+splom(~sce_dm@eigenvectors[, 1:5], groups =sce$ident, col = my_color, main ="sce_lineage",key = list(space="right", 
+                                                                                                      points = list(pch = 19, col =my_color), 
+                                                                                                      text = list(c(levels(sce$ident)))))
+
+ggsave()
+```
+
+
+
+
+```{r}
+plot_dm_3D(dm = sce_dm, dc = c(1,2,3), condition = seu@active.ident, colour = my_color, size = 3) 
+rglwidget()
+rgl.postscript('./OutputFigure/3dplot.pdf', fmt = 'pdf')
+```
+
+
+Get pseudotime with slingshot
+```{r}
+#Get pseudotime with slingshot
+sce_pseudotime <- get_pseudotime(sce_lineage, wthres = 0.90)
+rownames(sce_pseudotime) <- colnames(x = sce)
+
+lineage1 <- sort(sce_pseudotime[!is.na(sce_pseudotime[, 1]), 1])
+lineage2 <- sort(sce_pseudotime[!is.na(sce_pseudotime[, 2]), 2])
+lineage3 <- sort(sce_pseudotime[!is.na(sce_pseudotime[, 3]), 3])
+lineage4 <- sort(sce_pseudotime[!is.na(sce_pseudotime[, 4]), 4])
+lineage5 <- sort(sce_pseudotime[!is.na(sce_pseudotime[, 5]), 5])
+
+```
+
+```{r}
+length(lineage1)
+```
+```{r}
+curves <- slingCurves(sce_lineage)
+
+```
+
+
+## 1.3 Visualization 
+
+
+```{r, fig.height=10, fig.width=10}
+plot_dm_3D_in_2D(dm = sce_dm, dc = c(1, 2, 3), condition = seu@active.ident, 
+                 colour = my_color, size = 1, theta = 90, phi = 150, pch = 21, bty = "g")
+```
+
+
+
+
+
+Highlight each lineage
+```{r}
+highlight_cells_per_lineage_dmplot3D_2 <- function(object, dm=dm, dc=c(1:3), highlight.cells, condition=condition, colours=colours, lineage.curve=NULL, size=1, pch = 21, outline.color = "#E5E4E2", bg.color = "#E5E4E2", title="Diffusion map",phi = 40, theta = 40, add.curve=NULL, bty ="b"){
+    
+    # Adjusting the transparency for bg.color and outline.color
+    bg.color <- grDevices::adjustcolor(bg.color, alpha.f = 0.7)
+    outline.color <- grDevices::adjustcolor(outline.color, alpha.f = 0.2)
+    
+    cell.use.s <- highlight.cells
+    
+    cols <- factor(condition)
+    levels(cols) <- colours
+    cols <- as.vector(cols)
+    DCs <- paste("DC",dc, sep="")
+    
+    data <- data.frame(
+    dm@eigenvectors[,DCs[1]],
+    dm@eigenvectors[,DCs[2]],
+    dm@eigenvectors[,DCs[3]],
+    Cell=row.names(object@reductions$pca@cell.embeddings),
+    Ident=condition,
+    Color=cols
+    )
+    colnames(data) <- c(DCs,"Cell","ident","Color")
+    
+    data2 = subset(data, data$Cell %in% cell.use.s)
+    
+    scatter3D(x=as.matrix(data[,DCs[1]]), 
+    y=as.matrix(data[,DCs[2]]), 
+    z=as.matrix(data[,DCs[3]]), 
+    bg = bg.color, 
+    col = outline.color, 
+    pch=pch, 
+    cex = size, 
+    xlab = DCs[1], 
+    ylab = DCs[2], 
+    zlab = DCs[3], 
+    theta =theta, 
+    phi = phi, main =title, bty = bty)
+    
+    scatter3D(x=as.matrix(data2[,DCs[1]]), y=as.matrix(data2[,DCs[2]]), z=as.matrix(data2[,DCs[3]]), bg = as.matrix(data2[,"Color"]), 
+    col = outline.color, pch=pch, cex = size, xlab = DCs[1], ylab = DCs[2], zlab = DCs[3], theta =theta, phi = phi, add=TRUE, bty = bty)
+    
+    if(!is.null(add.curve)){
+        c <- add.curve
+        scatter3D(x = c$s[c$ord,DCs[1]], y =c$s[c$ord,DCs[2]], z = c$s[c$ord,DCs[3]], col = "black", type = "l", ticktype = "detailed", lwd = 4, add = TRUE, xlab = DCs[1], ylab = DCs[2], zlab = DCs[3], theta =theta, phi = phi, bty = bty)
+    }
+    
+}
+
+```
+
+
+
+```{r}
+glist <- list()
+celllist <- list(names(lineage1), names(lineage2), names(lineage3), names(lineage4), names(lineage5))
+for (i in 1:5){
+	# Start the png device
+  filename <- paste0("./OutputFigure/JE_1st_impute_slingshot_phi40_Branch_", i, ".png")
+  png(filename, width=1800, height=1800)
+  cell.use.s <- celllist[[i]]
+  title <- paste("Branch", i, sep="")
+  g <- highlight_cells_per_lineage_dmplot3D_2(object = seu, dm = sce_dm, dc = c(1, 2, 3), 
+                                            condition = seu@active.ident, colours = my_color,
+                                            highlight.cells = cell.use.s, size=0.5,theta = 90,  phi = 10, bty = "n", title = title)
+  g <- g + scatter3D(x = curves$Lineage1$s[curves$Lineage1$ord, 1], 
+          y = curves$Lineage1$s[curves$Lineage1$ord, 2], 
+          z = curves$Lineage1$s[curves$Lineage1$ord, 3], 
+          col = "black", type = "l", ticktype = "detailed", lwd = 1, add = TRUE)
+  g <- g + scatter3D(x = curves$Lineage2$s[curves$Lineage2$ord, 1], 
+          y = curves$Lineage2$s[curves$Lineage2$ord, 2], 
+          z = curves$Lineage2$s[curves$Lineage2$ord, 3], 
+          col = "black", type = "l", ticktype = "detailed", lwd = 1, add = TRUE)
+  g <- g + scatter3D(x = curves$Lineage3$s[curves$Lineage3$ord, 1], 
+          y = curves$Lineage3$s[curves$Lineage3$ord, 2], 
+          z = curves$Lineage3$s[curves$Lineage3$ord, 3], 
+          col = "black", type = "l", ticktype = "detailed", lwd = 1, add = TRUE)
+  g <- g + scatter3D(x = curves$Lineage4$s[curves$Lineage4$ord, 1], 
+          y = curves$Lineage4$s[curves$Lineage4$ord, 2], 
+          z = curves$Lineage4$s[curves$Lineage4$ord, 3], 
+          col = "black", type = "l", ticktype = "detailed", lwd = 1, add = TRUE)
+  g <- g + scatter3D(x = curves$Lineage5$s[curves$Lineage5$ord, 1], 
+          y = curves$Lineage5$s[curves$Lineage5$ord, 2], 
+          z = curves$Lineage5$s[curves$Lineage5$ord, 3], 
+          col = "black", type = "l", ticktype = "detailed", lwd = 1, add = TRUE)
+
+  glist[[i]] <- g
+    # Close the graphics device, saving the plot
+  dev.off()
+}
+```
+
+```{r}
+
+highlight_cells_per_lineage_UMAPplot <- function(object, highlight.cells, pt.size = 2, pt.shape = 21, outline.color = "grey30", bg.color = "#d3d3d3", hi.color, outline.size = 0.2,title="Umap"){
+    
+    cell.use.s <- highlight.cells
+    
+    data.plot=data.frame(object@reductions$umap@cell.embeddings,row.names(object@reductions$pca@cell.embeddings),object@active.ident)
+    colnames(data.plot) <- c("UMAP_1","UMAP_2","Cell","ident")
+    
+    g=ggplot(data.plot,aes(x=UMAP_1,y=UMAP_2))
+    g=g+geom_point(size=pt.size, shape=pt.shape, color=outline.color, fill=bg.color, stroke = outline.size)
+    g=g+geom_point(data=subset(data.plot, data.plot$Cell %in% cell.use.s), aes(fill =ident), color=outline.color, size=pt.size, shape=pt.shape, stroke = outline.size)
+    g=g+scale_fill_manual(values = hi.color,name="")+ggtitle(title)
+    g=g+theme_grey()+
+    theme(
+    axis.text=element_text(size=16),
+    axis.title=element_text(size=16),
+    legend.text = element_text(size =16),
+    legend.title = element_text(size =16 ,face="bold"),
+    plot.title = element_text(size=18, face="bold", hjust = 0.5),
+    aspect.ratio=1
+    )
+    return(g)
+}
+
+```
+
+
+
+```{r}
+glist <- list()
+celllist <- list(names(lineage1), names(lineage2),names(lineage3), names(lineage4),names(lineage5))
+for (i in 1:5){
+  cell.use.s <- celllist[[i]]
+  title <- paste("Branch", i, sep="")
+  g <- highlight_cells_per_lineage_UMAPplot(seu, highlight.cells = cell.use.s, hi.color = my_color, title = title)
+  glist[[i]] <- g
+}
+```
+```{r, fig.width=20, fig.height=20}
+plot_grid(glist[[1]], glist[[2]], glist[[3]], glist[[4]], glist[[5]], ncol = 3)
+ggsave(filename = "./OutputFigure/pJE_1st_impute_slingshot_lineage_umap.png", width = 30, height = 30)
+```
+
+
+
+
+
+
+
+## 1.4 Initial plot for all Lineages in UMAP
+
+By default, you can use cell_colors for celltype color options
+
+```{r}
+plot(reducedDims(sce)$UMAP,  col = cell_colors, pch=16, asp = 1, cex=0.5)                       
+lines(SlingshotDataSet(sce), lwd=2, type = 'lineage', col='black')
+```
+
+```{r}
+plot(reducedDims(sce)$PCA,  col =cb_palette[sce$celltype], pch=16, asp = 1, cex=0.5)                       
+lines(SlingshotDataSet(sce), lwd=2, type = 'lineage', col='black')
+```
+
+You may also use our previous color apporoach using `cb_palette`.
+
+```{r}
+plot(reducedDims(sce)$UMAP,  col =cb_palette[sce$celltype], pch=16, asp = 1, cex=0.2)                       
+lines(SlingshotDataSet(sce), lwd=2, type = 'lineage', col='black')
+```
+
+```{r}
+plot(reducedDims(sce)$UMAP,  
+     col =cb_palette[sce$celltype],
+     pch=16, 
+     asp = 1, 
+     cex=0.2)                         
+lines(SlingshotDataSet(sce), lwd=2,  col='black')
+```
+
+You may set alpha (from scales package). With bigger `cex` and smaller
+`alpha`.
+
+```{r}
+plot(reducedDims(sce)$UMAP,  
+     col = alpha(cb_palette[sce$celltype],0.5),
+     pch=16, 
+     asp = 1, 
+     cex=0.5)                         
+lines(SlingshotDataSet(sce), lwd=2,  col='black')
+```
+
+Obviously, we will use UMAP for the downstream plot Below, we will
+present how to "hide" lineage you don't want to show.
+
+```{r}
+nc <- 3
+pt <- slingPseudotime(sce)
+
+nms <- colnames(pt)
+nr <- ceiling(length(nms)/nc)
+pal <- viridis(100, end = 0.95)
+par(mfrow = c(nr, nc))
+for (i in nms) {
+  colors <- pal[cut(pt[,i], breaks = 100)]
+  plot(reducedDims(sce)$UMAP, col = colors, pch = 16, cex = 0.5, main = i)
+  lines(SlingshotDataSet(sce), lwd = 2, col = 'black', type = 'lineages')
+}
+
+
+
+```
+
+```{r}
+nc <- 3
+pt <- slingPseudotime(sce)
+
+nms <- colnames(pt)
+nr <- ceiling(length(nms)/nc)
+pal <- viridis(100, end = 0.95)
+par(mfrow = c(nr, nc))
+for (i in nms) {
+  colors <- pal[cut(pt[,i], breaks = 100)]
+  plot(reducedDims(sce)$UMAP, col = colors, pch = 16, cex = 0.5, main = i)
+  lines(SlingshotDataSet(sce), lwd = 2, col = 'black')
+}
+
+
+
+```
+
+When running `SlingshotDataSet(sce)` we will see the composite of
+different lineages: lineages: 4 Lineage1: GE1 GE8 GE5 GE9 GE7\
+Lineage2: GE1 GE8 GE2 GE6\
+Lineage3: GE1 GE8 GE4\
+Lineage4: GE1 GE8 GE3
+
+## 1.5 Pseudotime plot for Lienage 1
+
+For instance, if you are especially interested in GE7 related, ie,
+Lineage 1, you may run the following commands for plot
+
+```{r}
+nc <- 3
+pt <- slingPseudotime(sce)
+
+nms <- colnames(pt)
+nr <- ceiling(length(nms)/nc)
+pal <- viridis(100, end = 0.95)
+par(mfrow = c(nr, nc))
+
+colors <- pal[cut(pt[,"Lineage1"], breaks = 100)]
+plot(reducedDims(sce)$UMAP, col = colors, pch = 16, cex = 0.5, main = "Lineage1")
+lines(SlingshotDataSet(sce), linInd = 1)
+
+
+
+```
+
+```{r}
+
+pt <- slingPseudotime(sce)
+
+nms <- colnames(pt)
+
+pal <- viridis(100, end = 0.95)
+par(mfrow = c(1, 2))
+
+colors <- pal[cut(pt[,"Lineage1"], breaks = 100)]
+plot(reducedDims(sce)$UMAP, col = colors, pch = 16, cex = 0.5, main = "Lineage1", ylim=c(-10,10))
+lines(SlingshotDataSet(sce), linInd = 1)
+
+
+
+plot(reducedDims(sce)$UMAP,  
+     col =cb_palette[sce$celltype],
+     pch=16, 
+     asp = 1, 
+     cex=0.2,ylim=c(-10,10))  
+lines(SlingshotDataSet(sce), linInd = 1, type="l")
+```
+
+From the above plot, we can clearly see the path for Lineage 1: GE1 GE8
+GE5 GE9 GE7\
+If you don't want to see the color for other unwanted cluster, you may
+try this "dumb" approach, by coloring other cluster as gray (#808080)
+
+```{r}
+cb_palette_Lineage1 <- c("#F8766D", #GE1
+                "#C0C0C0", #GE2
+                "#C0C0C0", #GE3
+                "#C0C0C0", #GE4
+                "#00C19F", #GE5
+                "#C0C0C0", #GE6
+                "#619CFF", #GE7
+                "#DB72FB", #GE8
+                "#FF61C3"  #GE9
+                )
+
+plot(reducedDims(sce)$UMAP,  
+     col = alpha(cb_palette_Lineage1[sce$celltype], 0.5),
+     pch=16, 
+     asp = 1, 
+     cex=0.5)  
+lines(SlingshotDataSet(sce), linInd = 1, type="l")
+
+plot(reducedDims(sce)$UMAP,  
+     col = alpha(cb_palette_Lineage1[sce$celltype], 0.5),
+     pch=16, 
+     asp = 1, 
+     cex=0.5)  
+lines(SlingshotDataSet(sce), linInd = 1)
+```
+
+## 1.6 Pseudotime plot for other lineages
+
+For instance, if you are especially interested in GE3 related, ie,
+Lineage 4, you may run the following commands for plot
+
+```{r}
+nc <- 3
+pt <- slingPseudotime(sce)
+
+nms <- colnames(pt)
+nr <- ceiling(length(nms)/nc)
+pal <- viridis(100, end = 0.95)
+par(mfrow = c(nr, nc))
+
+colors <- pal[cut(pt[,"Lineage4"], breaks = 100)]
+plot(reducedDims(sce)$UMAP, col = colors, pch = 16, cex = 0.5, main = "Lineage4")
+lines(SlingshotDataSet(sce), 
+      linInd = 4 #change to 4 if you are working with Lineage4
+      )
+
+
+
+
+```
+
+```{r}
+nc <- 3
+pt <- slingPseudotime(sce)
+
+nms <- colnames(pt)
+nr <- ceiling(length(nms)/nc)
+pal <- viridis(100, end = 0.95)
+par(mfrow = c(nr, nc))
+
+colors <- pal[cut(pt[,"Lineage4"], breaks = 100)]
+plot(reducedDims(sce)$UMAP, col = colors, pch = 16, cex = 0.5, main = "Lineage4")
+lines(SlingshotDataSet(sce), linInd = 4)
+
+
+plot(reducedDims(sce)$UMAP,  
+     col =cb_palette[sce$celltype],
+     pch=16, 
+     asp = 1, 
+     cex=0.2)  
+lines(SlingshotDataSet(sce), linInd = 4, type="l")
+```
+
+From the above plot, we can clearly see the path for Lineage4: GE1 GE8
+GE3\
+If you don't want to see the color for other unwanted cluster, you may
+try this "dumb" approach, by coloring other cluster as gray (#808080)
+
+```{r}
+
+cb_palette_Lineage4 <- c("#F8766D", #GE1
+                "#C0C0C0", #GE2
+                "#93AA00", #GE3
+                "#C0C0C0", #GE4
+                "#C0C0C0", #GE5
+                "#C0C0C0", #GE6
+                "#C0C0C0", #GE7
+                "#DB72FB", #GE8
+                "#C0C0C0" #GE9
+                )
+
+plot(reducedDims(sce)$UMAP,  
+     col = alpha(cb_palette_Lineage4[sce$celltype], 0.5),
+     pch=16, 
+     asp = 1, 
+     cex=0.5)  
+lines(SlingshotDataSet(sce), linInd = 4, type="l")
+
+plot(reducedDims(sce)$UMAP,  
+     col = alpha(cb_palette_Lineage4[sce$celltype], 0.5),
+     pch=16, 
+     asp = 1, 
+     cex=0.5)  
+lines(SlingshotDataSet(sce), linInd = 4)
+```
+
+Lineage2: GE1 GE8 GE2 GE6
+
+```{r}
+
+cb_palette <- c("#F8766D", #GE1
+                "#D39200", #GE2
+                "#93AA00", #GE3
+                "#00BA38", #GE4
+                "#00C19F", #GE5
+                "#00B9E3", #GE6
+                "#619CFF", #GE7
+                "#DB72FB", #GE8
+                "#FF61C3" #GE9
+                )
+
+cb_palette_Lineage2 <- c("#F8766D", #GE1
+                "#D39200", #GE2
+                "#C0C0C0", #GE3
+                "#C0C0C0", #GE4
+                "#C0C0C0", #GE5
+                "#00B9E3", #GE6
+                "#C0C0C0", #GE7
+                "#DB72FB", #GE8
+                "#C0C0C0" #GE9
+                )
+
+plot(reducedDims(sce)$UMAP,  
+     col = alpha(cb_palette_Lineage2[sce$celltype], 0.5),
+     pch=16, 
+     asp = 1, 
+     cex=0.5)  
+lines(SlingshotDataSet(sce), linInd = 2, type="l")
+
+plot(reducedDims(sce)$UMAP,  
+     col = alpha(cb_palette_Lineage2[sce$celltype], 0.5),
+     pch=16, 
+     asp = 1, 
+     cex=0.5)  
+lines(SlingshotDataSet(sce), linInd = 2)
+```
+From the above plot Lineage 2 is not a real one, in such resolution
+
+Lineage3: GE1 GE8 GE4
+
+```{r}
+
+cb_palette <- c("#F8766D", #GE1
+                "#D39200", #GE2
+                "#93AA00", #GE3
+                "#00BA38", #GE4
+                "#00C19F", #GE5
+                "#00B9E3", #GE6
+                "#619CFF", #GE7
+                "#DB72FB", #GE8
+                "#FF61C3" #GE9
+                )
+
+cb_palette_Lineage3 <- c("#F8766D", #JE1
+                "#C0C0C0", #JE2
+                "#C0C0C0", #JE3
+                "#00BA38", #JE4
+                "#C0C0C0", #JE5
+                "#C0C0C0", #JE6
+                "#C0C0C0", #JE7
+                "#DB72FB", #JE8
+                "#C0C0C0" #JE9
+                )
+
+plot(reducedDims(sce)$UMAP,  
+     col = alpha(cb_palette_Lineage3[sce$celltype], 0.5),
+     pch=16, 
+     asp = 1, 
+     cex=0.5)  
+lines(SlingshotDataSet(sce), linInd = 3, type="l")
+
+plot(reducedDims(sce)$UMAP,  
+     col = alpha(cb_palette_Lineage3[sce$celltype], 0.5),
+     pch=16, 
+     asp = 1, 
+     cex=0.5)  
+lines(SlingshotDataSet(sce), linInd = 3)
+```
+
+## 1.7 Save Outputs
+
+```{r,save output}
+saveRDS(sce, file = "./SeuratObject/JE_combined_epi_harmony_SCT_renamed_slingshot.rds")
+
+```
