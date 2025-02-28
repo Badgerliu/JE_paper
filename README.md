@@ -4,6 +4,9 @@ This repository contains code and analysis scripts for the paper "p63-RUNX1-ODAM
 
 ## Repository Structure
 
+### JE_paper_scRNA_related_analysis_plot_data_flow.md
+    A markdown file showing the analysis and figure plots for scRNA-seq related figures in JE_paper
+    
 ### ATACSeq_DiiffBind/
 - `Gingiva_palate_ATAC_240506.Rmd`: R Markdown for ATAC-seq differential binding analysis
 - `Gingiva_palate_ATAC_samplelist.csv`: Sample metadata for ATAC-seq analysis
