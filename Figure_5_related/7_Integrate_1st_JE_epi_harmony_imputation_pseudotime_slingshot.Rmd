@@ -1,0 +1,1755 @@
+---
+title: "Mouse JE repair scRNA harmony epi imputation pseudotime with slingshot with diffusion map approach"
+author: "Huan"
+date: "1/4/2024"
+output: html_document
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  tidy = TRUE,
+  eval = FALSE,
+  tidy.opts = list(width.cutoff = 120),
+  message = TRUE,
+  warning = FALSE,
+  cache = TRUE,
+  label.duplicate = "append"
+)
+
+```
+
+Note that there are actually 3 lineages, where lineage 2 is not a real one.
+Lineage 4 is actually Lineage 2 in Figure2B, indicating the lineage for cycling cells
+
+#1 DE
+Let's look at which genes are differentially expressed along one
+of those lineages (linage 1, towarding Odam+ population). In dynverse,
+feature (gene) importance is calculated by using gene expression to
+predict pseudotime value with random forest and finding genes that
+contribute the most to the accuracy of the response. Since it's really
+not straightforward to convert existing pseudotime results to dynverse
+format, it would be easier to build a random forest model. Variable
+importance will be calculated for the top 300 highly variable genes
+here, with tidymodels. This is to make the code run faster. There are
+other methods of trajectory DE as well, which may be more appropriate
+but more time consuming to run, such as tradeSeq and SpatialDE (when run
+with one dimension). \## 2.1 Tidymodel approach Load necessary packages
+and datasets
+
+```{r}
+gc()
+rm(list=ls())
+library(rsample)
+library(tidymodels)
+library(RColorBrewer)
+library(Seurat)
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(slingshot)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(cowplot)
+library(gridExtra)
+library(viridis)
+library(readr)
+library(Hmisc)
+library(ggpubr)
+library(rsample)
+library(tidymodels)
+library(scales)
+library(tradeSeq)
+library(pheatmap)
+set.seed(12)
+theme_set(theme_bw())
+
+seu <- readRDS(file = "./SeuratObject/JE_combined_epi_harmony_MAGIC_renamed.rds")
+sce <- readRDS(file = "./SeuratObject/JE_combined_epi_harmony_SCT_renamed_slingshot.rds")
+```
+
+## 1.1 Prepare data
+```{r}
+# Get top highly variable genes
+seu <- SCTransform(seu, verbose = FALSE)
+top_hvg <- HVFInfo(object = seu, assay = "SCT") %>% 
+  mutate(., bc = rownames(.)) %>% 
+  arrange(desc(residual_variance)) %>% 
+  top_n(300, residual_variance) %>% 
+  pull(bc)
+# Prepare data for random forest
+dat_use <- t(GetAssayData(seu, slot = "data")[top_hvg,])
+```
+
+## 1.2 Driver genes in Lineage 1
+
+```{r}
+dat_use_df <- cbind(slingPseudotime(sce)[,1], dat_use) # Do lineage 1, so 1nd columnn
+colnames(dat_use_df)[1] <- "pseudotime"
+dat_use_df <- as.data.frame(dat_use_df[!is.na(dat_use_df[,1]),])
+```
+
+The subset of data is randomly split into training and validation; the
+model fitted on the training set will be evaluated on the validation
+set.
+
+```{r,initialization_1}
+
+dat_split <- initial_split(dat_use_df)
+dat_train <- training(dat_split)
+dat_val <- testing(dat_split)
+```
+
+tidymodels is a unified interface to different machine learning models,
+a "tidier" version of caret. The code chunk below can easily be adjusted
+to use other random forest packages as the back end, so no need to learn
+new syntax for those packages.
+
+```{r, model}
+
+model <- rand_forest(mtry = 200, trees = 1400, min_n = 15, mode = "regression") %>%
+  set_engine("ranger", importance = "impurity", num.threads = 3) %>%
+  fit(pseudotime ~ ., data = dat_train)
+```
+
+```{r,summary}
+summary(dat_use_df$pseudotime)
+```
+
+Now it's time to plot some genes deemed the most important to predicting
+pseudotime:
+
+```{r,predict}
+var_imp <- sort(model$fit$variable.importance, decreasing = TRUE)
+top_genes <- names(var_imp)[1:10]
+top_genes_cluster1 <- top_genes
+top_genes_cluster1
+# Convert to gene symbol
+#top_gene_name <- gns$gene_name[match(top_genes, gns$gene)]
+```
+
+```{r, plot pseudotime traj _1}
+par(mfrow = c(2, 3))
+for (i in seq_along(top_genes)) {
+  colors <- pal[cut(dat_use[,top_genes[i]], breaks = 100)]
+  plot(reducedDims(sce)$UMAP, col = colors, 
+       pch = 16, cex = 0.5, main = top_genes[i])
+  lines(SlingshotDataSet(sce), lwd = 2, col = 'black', type = 'lineages')
+}
+
+```
+
+## 1.2 Driver genes in other lineages
+
+### 1.2.1 Lineage 4
+Lineage 4 is the proliferative lineage (Lineage 2 in Figure 2B)
+
+```{r,prepare_2}
+dat_use_df <- cbind(slingPseudotime(sce)[,4], dat_use) # Do lineage 4, so 1nd columnn
+colnames(dat_use_df)[1] <- "pseudotime"
+dat_use_df <- as.data.frame(dat_use_df[!is.na(dat_use_df[,1]),])
+```
+
+The subset of data is randomly split into training and validation; the
+model fitted on the training set will be evaluated on the validation
+set.
+
+```{r, initial}
+
+dat_split <- initial_split(dat_use_df)
+dat_train <- training(dat_split)
+dat_val <- testing(dat_split)
+```
+
+tidymodels is a unified interface to different machine learning models,
+a "tidier" version of caret. The code chunk below can easily be adjusted
+to use other random forest packages as the back end, so no need to learn
+new syntax for those packages.
+
+```{r}
+
+model <- rand_forest(mtry = 200, trees = 1400, min_n = 15, mode = "regression") %>%
+  set_engine("ranger", importance = "impurity", num.threads = 3) %>%
+  fit(pseudotime ~ ., data = dat_train)
+```
+
+```{r}
+summary(dat_use_df$pseudotime)
+```
+
+Now it's time to plot some genes deemed the most important to predicting
+pseudotime:
+
+```{r}
+var_imp <- sort(model$fit$variable.importance, decreasing = TRUE)
+top_genes <- names(var_imp)[1:10]
+top_genes_cluster4 <- top_genes
+top_genes_cluster4
+# Convert to gene symbol
+#top_gene_name <- gns$gene_name[match(top_genes, gns$gene)]
+```
+
+```{r}
+par(mfrow = c(2, 3))
+for (i in seq_along(top_genes)) {
+  colors <- pal[cut(dat_use[,top_genes[i]], breaks = 100)]
+  plot(reducedDims(sce)$UMAP, col = colors, 
+       pch = 16, cex = 0.5, main = top_genes[i])
+  lines(SlingshotDataSet(sce), lwd = 2, col = 'black', type = 'lineages')
+}
+
+```
+
+### 1.2.2 Lineage 3
+
+```{r}
+dat_use_df <- cbind(slingPseudotime(sce)[,3], dat_use) # Do lineage 4, so 1nd columnn
+colnames(dat_use_df)[1] <- "pseudotime"
+dat_use_df <- as.data.frame(dat_use_df[!is.na(dat_use_df[,1]),])
+```
+
+The subset of data is randomly split into training and validation; the
+model fitted on the training set will be evaluated on the validation
+set.
+
+```{r}
+
+dat_split <- initial_split(dat_use_df)
+dat_train <- training(dat_split)
+dat_val <- testing(dat_split)
+```
+
+tidymodels is a unified interface to different machine learning models,
+a "tidier" version of caret. The code chunk below can easily be adjusted
+to use other random forest packages as the back end, so no need to learn
+new syntax for those packages.
+
+```{r}
+
+model <- rand_forest(mtry = 200, trees = 1400, min_n = 15, mode = "regression") %>%
+  set_engine("ranger", importance = "impurity", num.threads = 3) %>%
+  fit(pseudotime ~ ., data = dat_train)
+```
+
+```{r}
+summary(dat_use_df$pseudotime)
+```
+
+Now it's time to plot some genes deemed the most important to predicting
+pseudotime:
+
+```{r}
+var_imp <- sort(model$fit$variable.importance, decreasing = TRUE)
+top_genes <- names(var_imp)[1:10]
+top_genes_cluster3 <- top_genes
+top_genes_cluster3
+# Convert to gene symbol
+#top_gene_name <- gns$gene_name[match(top_genes, gns$gene)]
+```
+
+```{r}
+par(mfrow = c(2, 3))
+for (i in seq_along(top_genes)) {
+  colors <- pal[cut(dat_use[,top_genes[i]], breaks = 100)]
+  plot(reducedDims(sce)$UMAP, col = colors, 
+       pch = 16, cex = 0.5, main = top_genes[i])
+  lines(SlingshotDataSet(sce), lwd = 2, col = 'black', type = 'lineages')
+}
+
+```
+
+### 1.2.3 Lineage 2
+
+```{r}
+dat_use_df <- cbind(slingPseudotime(sce)[,2], dat_use) # Do lineage 4, so 1nd columnn
+colnames(dat_use_df)[1] <- "pseudotime"
+dat_use_df <- as.data.frame(dat_use_df[!is.na(dat_use_df[,1]),])
+```
+
+The subset of data is randomly split into training and validation; the
+model fitted on the training set will be evaluated on the validation
+set.
+
+```{r}
+
+dat_split <- initial_split(dat_use_df)
+dat_train <- training(dat_split)
+dat_val <- testing(dat_split)
+```
+
+tidymodels is a unified interface to different machine learning models,
+a "tidier" version of caret. The code chunk below can easily be adjusted
+to use other random forest packages as the back end, so no need to learn
+new syntax for those packages.
+
+```{r}
+
+model <- rand_forest(mtry = 200, trees = 1400, min_n = 15, mode = "regression") %>%
+  set_engine("ranger", importance = "impurity", num.threads = 3) %>%
+  fit(pseudotime ~ ., data = dat_train)
+```
+
+```{r}
+summary(dat_use_df$pseudotime)
+```
+
+Now it's time to plot some genes deemed the most important to predicting
+pseudotime:
+
+```{r}
+var_imp <- sort(model$fit$variable.importance, decreasing = TRUE)
+top_genes <- names(var_imp)[1:10]
+top_genes_cluster2 <- top_genes
+top_genes_cluster2
+# Convert to gene symbol
+#top_gene_name <- gns$gene_name[match(top_genes, gns$gene)]
+```
+
+```{r}
+par(mfrow = c(2, 3))
+for (i in seq_along(top_genes)) {
+  colors <- pal[cut(dat_use[,top_genes[i]], breaks = 100)]
+  plot(reducedDims(sce)$UMAP, col = colors, 
+       pch = 16, cex = 0.5, main = top_genes[i])
+  lines(SlingshotDataSet(sce), lwd = 2, col = 'black', type = 'lineages')
+}
+
+```
+
+### 1.2.4 Summary Lineage specific driver genes
+
+Generate a dataframe recording the top genes in each lineage
+
+```{r}
+top_genes_cluster <- data.frame(
+  lineage_1 = unlist(top_genes_cluster1),
+  lineage_2 = unlist(top_genes_cluster2),
+  lineage_3 = unlist(top_genes_cluster3),
+  lineage_4 = unlist(top_genes_cluster4)
+)
+write.csv(top_genes_cluster, file = "./OutputTable/JE_combined_epi_harmony_SCT_renamed_slingshot_top_genes_20220822.csv", row.names = FALSE)
+```
+
+###? Heatmap for these genes
+
+## 1.3 tradeSeq approach
+
+Several threads need to be read before starting this approach:
+`https://github.com/statOmics/tradeSeq/issues/56` and
+`https://github.com/statOmics/tradeSeq/issues/177`
+`https://github.com/statOmics/tradeSeq/issues/111` Also, you need to
+read
+`https://kstreet13.github.io/bioc2020trajectories/articles/workshopTrajectories.html`
+and
+`https://statomics.github.io/tradeSeq/articles/fitGAM.html#parallel-computing-1`
+
+Resume the data and packages
+
+```{r load of packages and setup of the environment 1}
+gc()
+rm(list=ls())
+library(Seurat)
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(slingshot)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(cowplot)
+library(gridExtra)
+library(viridis)
+library(readr)
+library(Hmisc)
+library(ggpubr)
+library(rsample)
+library(tidymodels)
+library(scales)
+library(tradeSeq)
+library(pheatmap)
+set.seed(12)
+theme_set(theme_bw())
+
+seu <- readRDS(file = "./SeuratObject/JE_combined_epi_harmony_MAGIC_renamed.rds")
+sce <-readRDS(file = "./SeuratObject/JE_combined_epi_harmony_SCT_renamed_slingshot.rds")
+```
+
+## 1.3.1 Prepare data
+
+```{r}
+crv <- SlingshotDataSet(sce)
+countMatrix <- sce@assays@data@listData[["counts"]]
+counts <- as.matrix(countMatrix)
+rm(countMatrix)
+```
+
+## 1.3.2 Fit negative binomial model
+
+```{r}
+set.seed(5)
+icMat <- evaluateK(counts = counts, 
+                   sds = crv, 
+                   k = 3:10, 
+                   nGenes = 800, 
+                   verbose = T)
+```
+
+The output graphics are organized into four panels. The left panel plots
+a boxplot for each number of knots we wanted to evaluate. The plotted
+values are the deviation from a gene's AIC at that specific knot value
+from the average AIC of that gene across all the knots under evaluation.
+Typically, AIC values are somewhat higher for low number of knots, and
+we expect them to decrease as the number of knots gets higher. The two
+middle panels plot the average drop in AIC across all genes. The middle
+left panel simply plots the average AIC, while the middle right panel
+plots the change in AIC relative to the average AIC at the lowest knot
+number (here, this is 3 knots, as can also be seen from the plot since
+the relative AIC equals 1). Finally, the right panel only plots a subset
+of genes where the AIC value changes significantly across the evaluated
+number of knots. Here, a significant change is defined as a change in
+absolute value of at least 2, but this can be tuned using the aicDiff
+argument to evaluateK. For the subset of genes, a barplot is displayed
+that shows the number of genes that have their lowest AIC at a specific
+knot value.
+
+The middle panels show that the drop in AIC levels off if the number of
+knots is increased beyond 8, and we will choose that number of knots to
+fit the tradeSeq models.
+
+We then fit the models by running the fitGAM function. By default, the
+gene-wise NB-GAM estimates one smoother for every lineage using the
+negative binomial distribution. Please refer to the fitGAM vignette
+Additional to add additional covariates to the model, speed up
+computation or allow for custom normalization, amongst others.
+
+```{r}
+
+pseudotime <- slingPseudotime(crv, na = FALSE)
+cellWeights <- slingCurveWeights(crv)
+```
+
+Since fitGAM will take quite a lot of time, we utilize paralle model.
+
+```{r}
+BPPARAM <- BiocParallel::bpparam()
+BPPARAM # lists current options
+```
+
+We will then set number of cores to be used.
+
+```{r}
+BPPARAM$workers <- 20 # use 20 cores
+```
+
+```{r}
+sce.trade <- fitGAM(counts = counts, pseudotime = pseudotime, cellWeights = cellWeights,
+                 nknots = 8, 
+                 verbose = TRUE, 
+                 parallel=TRUE, 
+                 BPPARAM = BPPARAM)
+```
+
+The model may be hard to fit for some genes, and hence the fitting
+procedure may not converge for all of the genes in a dataset, especially
+in datasets with complex patterns and/or many lineages. You can check
+the convergence of each gene as shown below, where a TRUE value
+corresponds to a converged model fit, and a FALSE value corresponds to a
+model that hasn't been able to converge fully.
+
+```{r}
+table(rowData(sce.trade)$tradeSeq$converged)
+```
+
+```{r}
+saveRDS(sce.trade,  file = "./SeuratObject/JE_combined_epi_harmony_SCT_renamed_slingshot_tradeSeq.rds")
+```
+
+## 1.3.2 Within-lineage comparisons
+
+## 1.3.2.1 Association of gene expression with pseudotime
+
+A first exploration of the data analysis may consist of checking whether
+gene expression is associated with a particular lineage. The statistical
+test performed here, implemented in the associationTest function, is
+testing the null hypothesis that all smoother coefficients are equal to
+each other. This can be interpreted as testing whether the average gene
+expression is significantly changing along pseudotime.
+
+```{r}
+assoRes <- associationTest(sce.trade)
+head(assoRes)
+```
+
+## 1.3.2.2 Discovering progenitor marker genes
+
+In order to discover marker genes of the progenitor or differentiated
+cell population, researchers may be interested in assessing differential
+expression between the progenitor cell population (i.e., the starting
+point of a lineage) with the differentiated cell type population (i.e.,
+the end point of a lineage). The function startVsEndTest uses a Wald
+test to assess the null hypothesis that the average expression at the
+starting point of the smoother (progenitor population) is equal to the
+average expression at the end point of the smoother (differentiated
+population). The test basically involves a comparison between two
+smoother coefficients for every lineage. The function startVsEndTest
+performs a global test across all lineages by default (i.e. it compares
+the start and end positions for all lineages simultaneously), but you
+can also assess all lineages separately by setting lineages=TRUE.
+
+First, we want to compare the start end with all lineages
+simultaneously.
+
+```{r}
+startRes_all <- startVsEndTest(sce.trade)
+```
+
+```{r}
+head(startRes_all)
+startRes_all <- startRes_all[order(startRes_all$pvalue, startRes_all$df),]
+head(startRes_all)
+```
+
+Let's plot the top10 most dynamic genes
+
+```{r}
+for (i in rownames(startRes_all)[1:10]){
+  print(i)
+  print(
+    plotSmoothers(sce.trade, counts, gene = i)
+  )
+  print(
+      FeaturePlot(seu, 
+                  features = i,
+                  cols = c("grey85", brewer.pal(9,"YlOrRd")),
+                  ncol=2, 
+                  pt.size = 0.1, label=T)
+    )
+}
+
+
+```
+
+Secondly, I want to assess all lineages separately
+
+```{r}
+startRes <- startVsEndTest(sce.trade,
+                           lineages=TRUE)
+```
+
+We then want to check the structure of startRes
+
+```{r}
+head(startRes)
+```
+
+With the structure of the dataframe startRes, we can access the top10
+genes in each lineage
+
+```{r}
+topGenes <- list()
+
+for (i in 1:4) {
+    # Order the genes based on significance for each lineage
+    oStart <- order(startRes[[paste0("waldStat_lineage", i)]], decreasing = TRUE)
+    
+    # Extract the top 10 genes' names for each lineage
+    topGenes[[paste0("lineage", i)]] <- names(sce.trade)[oStart[1:10]]
+}
+
+# Convert the list to a dataframe
+topGenesDF <- data.frame(
+    lineage1 = topGenes$lineage1,
+    lineage2 = topGenes$lineage2,
+    lineage3 = topGenes$lineage3,
+    lineage4 = topGenes$lineage4
+)
+
+```
+
+```{r}
+write.csv(topGenesDF, file = "./OutputTable/JE_combined_epi_harmony_SCT_renamed_slingshot_top_genes_in_each_lineage_20220822.csv", row.names = FALSE )
+```
+
+Plot all topDF genes
+
+```{r}
+# Convert the dataframe to a vector of genes
+all_genes <- as.vector(t(topGenesDF))
+
+# Loop through each gene and create the desired plots
+for (i in all_genes) {
+  
+  print(i)
+  
+  # First plot using plotSmoothers
+  print(
+    plotSmoothers(sce.trade, counts, gene = i)
+  )
+  
+  # Second plot using FeaturePlot
+  print(
+    FeaturePlot(seu, 
+                features = i,
+                cols = c("grey85", brewer.pal(9,"YlOrRd")),
+                ncol=2, 
+                pt.size = 0.1, label=T)
+  )
+}
+
+```
+
+We can visualize the estimated smoothers for the most significant gene
+in lineage 1.
+
+```{r}
+oStart <- order(startRes$waldStat_lineage1, #If you care about lineage 1, use waldStat_lineage1
+                decreasing = TRUE) # a list returning the most likely genes associated with progenitor along the lineage
+sigGeneStart <- names(sce.trade)[oStart[1]] # the most significant we are using `1`
+print(sigGeneStart)
+plotSmoothers(sce.trade, counts, gene = sigGeneStart)
+```
+
+```{r}
+plotGeneCount(crv, counts, gene = sigGeneStart, title=sigGeneStart)
+```
+
+We can visualize the estimated smoothers for the third most significant
+gene in lineage 3.
+
+```{r}
+
+sigGeneStart <- names(sce.trade)[oStart[3]] #  most significant we are using `3`
+plotSmoothers(sce.trade, counts, gene = sigGeneStart)
+```
+
+```{r}
+plotGeneCount(crv, counts, gene = sigGeneStart, title=sigGeneStart)
+```
+
+If you want to know the top 10 progenitor genes in lineage 1:
+
+```{r}
+names(sce.trade)[oStart[1:10]] 
+```
+
+If you want to know "Igfbp7"
+
+```{r}
+sigGeneStart <- "Igfbp7" #  most significant we are using `3`
+plotSmoothers(sce.trade, counts, gene = sigGeneStart)
+```
+
+```{r}
+plotGeneCount(crv, counts, gene = sigGeneStart, title=sigGeneStart)
+```
+
+If you want ot plot for each lineage, refer to
+`https://github.com/statOmics/tradeSeq/issues/167`
+
+## 1.3.2.3 Comparing specific pseudotime values within a lineage
+
+The startVsEndTest compares two points on a lineage, and by default it
+is comparing the start point with the end point. However, this is a
+specific form of a more general capability of the startVsEndTest to
+compare any two points on any lineage. If the interest lies in comparing
+any two custom pseudotime values, one can specify this using the
+pseudotimeValues arguments in startVsEndTest. For example, below we'd
+like to compare the expression for each gene at pseudotime values of 0.8
+and 0.1.
+
+```{r}
+customRes <- startVsEndTest(sce.trade, pseudotimeValues = c(0.1, 0.8))
+```
+
+```{r}
+head(customRes)
+```
+
+```{r}
+test <- customRes[order(-customRes$waldStat),]
+test[1:10,]
+```
+
+```{r}
+plotGeneCount(crv, counts, gene = "Lars2")
+plotSmoothers(sce.trade, counts, gene = "Lars2")
+```
+
+## 1.3.3 Between-lineage comparisons
+
+## 1.3.3.1 Discovering differentiated cell type markers between lineages
+
+tradeSeq can discover marker genes for the differentiated cell types by
+comparing the average expression between end points of the
+lineage-specific smoothers. This is implemented in the diffEndTest
+function. By default, diffEndTest performs a global test, testing the
+null hypothesis that the average expression at the endpoints is equal
+for all lineages using a multivariate Wald test. If more than two
+lineages are present, one can assess all pairwise comparisons using the
+pairwise=TRUE argument. Here we use "End" as points for differentiated
+stages.
+
+```{r}
+endRes <- diffEndTest(sce.trade, pairwise=TRUE)
+```
+
+```{r}
+endRes_test <- diffEndTest(sce.trade, pairwise=TRUE)
+rm(endRes_test)
+```
+
+Before going for the top changed genes, you need to check the headers
+for `endRes`
+
+```{r}
+endRes[1:3, ]
+```
+
+Since we performed pairwise comparison, we need to pay attention to
+`waldStat_` to speicify the inter-lineage comparison. Below, we first
+write a function to get the top10 genes for a given comparison, then we
+implemented it for each pairwise comparison
+
+```{r}
+# Function to get top 10 genes for a given comparison
+getTopGenes <- function(column_name) {
+    o <- order(endRes[[column_name]], decreasing = TRUE)
+    return(names(sce.trade)[o[1:10]])
+}
+
+# Apply the function for each pairwise comparison
+topGenes_1vs2 <- getTopGenes("waldStat_1vs2")
+topGenes_1vs3 <- getTopGenes("waldStat_1vs3")
+topGenes_1vs4 <- getTopGenes("waldStat_1vs4")
+topGenes_2vs3 <- getTopGenes("waldStat_2vs3")
+topGenes_2vs4 <- getTopGenes("waldStat_2vs4")
+topGenes_3vs4 <- getTopGenes("waldStat_3vs4")
+
+# Build the resulting dataframe
+topGenesDF <- data.frame(
+    Lineage_1_vs_2 = topGenes_1vs2,
+    Lineage_1_vs_3 = topGenes_1vs3,
+    Lineage_1_vs_4 = topGenes_1vs4,
+    Lineage_2_vs_3 = topGenes_2vs3,
+    Lineage_2_vs_4 = topGenes_2vs4,
+    Lineage_3_vs_4 = topGenes_3vs4
+)
+
+```
+
+```{r}
+head(topGenesDF)
+```
+
+```{r}
+write.csv(topGenesDF, file = "./OutputTable/JE_combined_epi_harmony_SCT_renamed_slingshot_top_10_for_differentiated_between_lineage_20220822.csv", row.names = FALSE )
+```
+
+Plot all topDF genes between lineages
+
+```{r}
+# Convert the dataframe to a vector of genes
+all_genes <- as.vector(t(topGenesDF))
+
+# Loop through each gene and create the desired plots
+for (i in all_genes) {
+  
+  print(i)
+  
+  # First plot using plotSmoothers
+  print(
+    plotSmoothers(sce.trade, counts, gene = i)
+  )
+  
+  # Second plot using FeaturePlot
+  print(
+    FeaturePlot(seu, 
+                features = i,
+                cols = c("grey85", brewer.pal(9,"YlOrRd")),
+                ncol=2, 
+                pt.size = 0.1, label=T)
+  )
+}
+
+```
+
+Let's check the differential genes along each lineage
+
+```{r}
+# Convert the dataframe to a vector of genes
+all_genes <- as.vector(t(topGenesDF))
+
+# Loop through each gene and create the desired plots
+for (i in all_genes) {
+  
+  print(i)
+  
+  # First plot using plotSmoothers
+  print(
+    plotSmoothers(sce.trade, counts, gene = i)
+  )
+  
+  # Second plot using FeaturePlot
+  print(
+    plotGeneCount(crv, counts, gene = i, title=i)
+  )
+}
+
+
+
+
+```
+
+Also,I'll loop through the columns of the topGenesDF dataframe and
+adjust the curvesCols according to the comparison. For this, we'll
+create a helper function to determine the appropriate color codes for
+each pairwise comparison: We will save the outputs in png formats.
+
+```{r}
+
+library(ggplot2)
+
+# Function to determine color codes for a given pairwise comparison
+getCurvesCols <- function(comparison) {
+    allCols <- c("#93AA00", "#00BA38", "#00B9E3", "#619CFF")
+    transp1 <- "transparent"
+    transp2 <- "transparent"
+    
+    if (comparison == "Lineage_1_vs_2") return(c(allCols[4], allCols[3], transp1, transp2))
+    if (comparison == "Lineage_1_vs_3") return(c(allCols[4], transp1, allCols[2], transp2))
+    if (comparison == "Lineage_1_vs_4") return(c(allCols[4], transp1, transp2, allCols[1]))
+    if (comparison == "Lineage_2_vs_3") return(c(transp1, allCols[3], allCols[2], transp2))
+    if (comparison == "Lineage_2_vs_4") return(c(transp1, allCols[3], transp2, allCols[1]))
+    if (comparison == "Lineage_3_vs_4") return(c(transp1, transp2, allCols[2], allCols[1]))
+}
+
+# Output directory
+output_dir <- "./OutputFigure/"
+
+# Check if the output directory exists, if not, create it
+if (!dir.exists(output_dir)) {
+    dir.create(output_dir)
+}
+
+# Loop through the columns of topGenesDF and plot each gene
+for (comparison in colnames(topGenesDF)) {
+    curvesCols <- getCurvesCols(comparison)
+    for (gene in topGenesDF[[comparison]]) {
+        plot_obj <- plotSmoothers(sce.trade, counts, gene, curvesCols = curvesCols, border = FALSE) +
+                    scale_color_manual(values = curvesCols)
+        
+        # Define filename
+        filename <- paste(output_dir, "Plot_", comparison, "_", gene, ".png", sep = "")
+        
+        # Save plot to file
+        ggsave(filename, plot = plot_obj, width = 10, height = 5)
+    }
+}
+
+```
+
+Below, we can check the genes in each comparison We can plot the most
+significant gene using the plotSmoothers function. Here, we compare
+Lineage 1 vs Lineage 3
+
+```{r}
+o <- order(endRes$waldStat_1vs3, decreasing = TRUE)
+sigGene <- names(sce.trade)[o[1]]
+
+```
+
+```{r}
+sigGene
+```
+
+```{r}
+plotSmoothers(sce.trade, counts, sigGene)
+```
+
+```{r}
+ names(sce.trade)[o[1:10]]
+```
+
+```{r}
+plotSmoothers(sce.trade, counts, "Fam57a")
+```
+
+OK, if you want to plot gene changes specifically for lineage 1 and 3,
+assign the cluster with different color (destination cluster of each
+lineage, ie GE7 for lineage 1, GE3 for lineage 3) and transparent other
+lineages as below: refer to
+`https://github.com/statOmics/tradeSeq/issues/167`
+
+```{r}
+cb_palette <- c("#F8766D", #GE1
+                "#D39200", #GE2
+                "#93AA00", #GE3/Lineage4
+                "#00BA38", #GE4/Lineage3
+                "#00C19F", #GE5
+                "#00B9E3", #GE6/Lineage6
+                "#619CFF", #GE7/Lineage1
+                "#DB72FB", #GE8
+                "#FF61C3" #GE9
+                )
+```
+
+```{r}
+curvesCols <- c("#619CFF", "transparent","#00BA38","transparent")
+plotSmoothers(sce.trade, counts, "Fam57a", curvesCols = curvesCols,
+              border = FALSE) +
+  scale_color_manual(values = curvesCols)
+ggsave("./OutputFigure/Plot_Fam57a_lineage1vs3.png",  width = 10, height = 5)
+```
+
+Of course, you may use the above script to plot any gens you want. For
+instance, Krt14 and Krt5
+
+```{r}
+curvesCols <- c("#619CFF", "transparent","#00BA38","transparent")
+plotSmoothers(sce.trade, counts, "Krt14", curvesCols = curvesCols,
+              border = FALSE) +
+  scale_color_manual(values = curvesCols)
+ggsave("./OutputFigure/Plot_Krt14_lineage1vs3.png",  width = 10, height = 5)
+```
+
+```{r}
+curvesCols <- c("#619CFF", "transparent","#00BA38","transparent")
+plotSmoothers(sce.trade, counts, "Krt5", curvesCols = curvesCols,
+              border = FALSE) +
+  scale_color_manual(values = curvesCols)
+ggsave("./OutputFigure/Plot_Krt5_lineage1vs3.png",  width = 10, height = 5)
+```
+
+Krt16
+
+```{r}
+curvesCols <- c("#619CFF", "transparent","#00BA38","transparent")
+plotSmoothers(sce.trade, counts, "Krt16", curvesCols = curvesCols,
+              border = FALSE) +
+  scale_color_manual(values = curvesCols)
+ggsave("./OutputFigure/Plot_Krt16_lineage1vs3.png",  width = 10, height = 5)
+```
+
+```{r}
+curvesCols <- c("#619CFF", "#00B9E3","#00BA38","transparent")
+plotSmoothers(sce.trade, counts, "Itgb4", curvesCols = curvesCols,
+              border = FALSE) +
+  scale_color_manual(values = curvesCols)
+ggsave("./OutputFigure/Plot_Itgb4_lineage1vs3.png",  width = 10, height = 5)
+```
+
+```{r, two-color plot for different krt genes,fig.height=5, fig.width=15}
+FeaturePlot(object = seu, features = c("Fam57a", "Lor"), cols= c("#ddf4f5", "orange", "blue", "green"), blend  = TRUE)
+
+```
+
+```{r, two-color plot for different krt genes,fig.height=5, fig.width=15}
+FeaturePlot(object = seu, features = c("Fam57a", "Odam"), cols= c("#ddf4f5", "orange", "blue", "green"), blend  = TRUE)
+
+```
+
+```{r, two-color plot for different krt genes,fig.height=5, fig.width=15}
+FeaturePlot(object = seu, features = c("Ptma", "Lor"), cols= c("#ddf4f5", "orange", "blue", "green"), blend  = TRUE)
+
+```
+
+```{r, two-color plot for different krt genes,fig.height=5, fig.width=15}
+FeaturePlot(object = seu, features = c("Ptma", "Odam"), cols= c("#ddf4f5", "orange", "blue", "green"), blend  = TRUE)
+
+```
+
+## 1.3.3.2 Discovering genes with different expression patterns
+
+Asides from testing at the level of the differentiated cell type,
+researchers may be interested in assessing the expression pattern of a
+gene over pseudotime. The function patternTest implements a statistical
+method that checks whether the smoothed gene expression is equal along
+pseudotime between two or multiple lineages. In practice, we use 100
+points, equally distributed along pseudotime, that are compared between
+two (or multiple) lineages, and this number can be changed using the
+nPoints argument.
+
+```{r}
+patternRes <- patternTest(sce.trade, pairwise=TRUE)
+```
+
+Confronted with the Error "Error in t(L) %\*% Sigma : non-conformable
+arguments", I referred to
+`https://github.com/statOmics/tradeSeq/issues/56` and picked the most
+abnormal rows containing the fewest non-null values.
+
+```{r}
+# Assuming your data is in tradeSeq_data
+tradeSeq_data <- rowData(sce.trade)$tradeSeq
+
+# 1. Drop the 'Sigma' column
+tradeSeq_data <- tradeSeq_data %>% dplyr::select(-Sigma)
+```
+
+```{r}
+# 2. Compute the number of non-missing values per row
+num_non_missing <- rowSums(!is.na(tradeSeq_data))
+
+# 3. Identify the rows with the fewest non-missing values
+min_non_missing <- min(num_non_missing)
+rows_with_fewest_non_missing <- which(num_non_missing == min_non_missing)
+
+# Show the rows with the fewest non-missing values
+tradeSeq_data[rows_with_fewest_non_missing, ]
+
+```
+
+Again, we performed the patternTest using the sce.trade object with
+abnormal rows excluded.
+
+```{r}
+patternRes <- patternTest(sce.trade[-rows_with_fewest_non_missing,], pairwise=TRUE)
+```
+
+We then check the headers
+
+```{r}
+patternRes[1:3, ]
+```
+
+We want to see which genes
+
+```{r}
+oPat <- order(patternRes$waldStat, 
+              decreasing = TRUE)
+head(rownames(patternRes)[oPat])
+```
+
+List the top 10 genes:
+
+```{r}
+rownames(patternRes)[oPat][1:10]
+top10_patternRes <- rownames(patternRes)[oPat][1:10]
+write.csv(top10_patternRes, file = "./OutputTable/JE_combined_epi_harmony_SCT_renamed_slingshot_top_10_genes_with_different_pattern_among_all_lineages_20220822.csv", row.names = FALSE )
+
+```
+
+We then check the top10 differential genes among the four lineages
+
+```{r}
+curvesCols <- c("#619CFF", "#00B9E3","#00BA38","#93AA00")
+    for (gene in top10_patternRes) {
+        plot_obj <- plotSmoothers(sce.trade, counts, gene, curvesCols = curvesCols, border = FALSE) +
+                    scale_color_manual(values = curvesCols)
+        
+        # Define filename
+        filename <- paste(output_dir, "Plot_top10_different_pattern_among_all_lineages", "_", gene, ".png", sep = "")
+        
+        # Save plot to file
+        ggsave(filename, plot = plot_obj, width = 10, height = 5)
+    }
+```
+
+Below, we first write a function to get the top10 genes for a given
+comparison, then we implemented it for each pairwise comparison
+
+```{r}
+# Function to get top 10 genes for a given comparison
+getTopGenes <- function(column_name) {
+    o <- order(patternRes[[column_name]], decreasing = TRUE)
+    return(names(sce.trade)[o[1:10]])
+}
+
+# Apply the function for each pairwise comparison
+topGenes_1vs2 <- getTopGenes("waldStat_1vs2")
+topGenes_1vs3 <- getTopGenes("waldStat_1vs3")
+topGenes_1vs4 <- getTopGenes("waldStat_1vs4")
+topGenes_2vs3 <- getTopGenes("waldStat_2vs3")
+topGenes_2vs4 <- getTopGenes("waldStat_2vs4")
+topGenes_3vs4 <- getTopGenes("waldStat_3vs4")
+
+# Build the resulting dataframe
+topGenesDF_1v1 <- data.frame(
+    Lineage_1_vs_2 = topGenes_1vs2,
+    Lineage_1_vs_3 = topGenes_1vs3,
+    Lineage_1_vs_4 = topGenes_1vs4,
+    Lineage_2_vs_3 = topGenes_2vs3,
+    Lineage_2_vs_4 = topGenes_2vs4,
+    Lineage_3_vs_4 = topGenes_3vs4
+)
+
+```
+
+```{r}
+head(topGenesDF_1v1)
+```
+
+```{r}
+write.csv(topGenesDF_1v1, file = "./OutputTable/JE_combined_epi_harmony_SCT_renamed_slingshot_top_10_genes_with_different_pattern_between_two_lineages_20220822.csv", row.names = FALSE )
+```
+
+Also,I'll loop through the columns of the topGenesDF_1v1 dataframe and
+adjust the curvesCols according to the comparison. For this, we'll
+create a helper function to determine the appropriate color codes for
+each pairwise comparison: We will save the outputs in png formats.
+
+```{r}
+
+library(ggplot2)
+
+# Function to determine color codes for a given pairwise comparison
+getCurvesCols <- function(comparison) {
+    allCols <- c("#93AA00", "#00BA38", "#00B9E3", "#619CFF")
+    transp1 <- "transparent"
+    transp2 <- "transparent"
+    
+    if (comparison == "Lineage_1_vs_2") return(c(allCols[4], allCols[3], transp1, transp2))
+    if (comparison == "Lineage_1_vs_3") return(c(allCols[4], transp1, allCols[2], transp2))
+    if (comparison == "Lineage_1_vs_4") return(c(allCols[4], transp1, transp2, allCols[1]))
+    if (comparison == "Lineage_2_vs_3") return(c(transp1, allCols[3], allCols[2], transp2))
+    if (comparison == "Lineage_2_vs_4") return(c(transp1, allCols[3], transp2, allCols[1]))
+    if (comparison == "Lineage_3_vs_4") return(c(transp1, transp2, allCols[2], allCols[1]))
+}
+
+# Output directory
+output_dir <- "./OutputFigure/"
+
+# Check if the output directory exists, if not, create it
+if (!dir.exists(output_dir)) {
+    dir.create(output_dir)
+}
+
+# Loop through the columns of topGenesDF_1v1 and plot each gene
+for (comparison in colnames(topGenesDF_1v1)) {
+    curvesCols <- getCurvesCols(comparison)
+    for (gene in topGenesDF_1v1[[comparison]]) {
+        plot_obj <- plotSmoothers(sce.trade, counts, gene, curvesCols = curvesCols, border = FALSE) +
+                    scale_color_manual(values = curvesCols)
+        
+        # Define filename
+        filename <- paste(output_dir, "Plot_top10_different_pattern_", comparison, "_", gene, ".png", sep = "")
+        
+        # Save plot to file
+        ggsave(filename, plot = plot_obj, width = 10, height = 5)
+    }
+}
+
+```
+
+## 1.3.3.3 Early drivers of differentiation between lineage
+
+Another question of interest is to find a list of genes that are
+differentially expressed between lineages at a particular region,
+e.g. around the separation of two or multiple lineages. The function
+earlyDETest implements a statistical method to test the null hypothesis
+of whether the average gene expression smoothers are equal between
+lineages in a region defined by two user-specified knots. Again, the
+knots can be visualized with the plotGeneCount function. By selecting
+the region covering the first two knot points to test for differential
+patterns between the lineages, we check which genes are behaving
+differently around the bifurcation point.
+
+```{r}
+plotc <- plotGeneCount(curve = crv, counts = counts,
+              clusters = apply(slingClusterLabels(crv), 1, which.max),
+              models = sce.trade)
+plotc
+ggsave("./OutputFigure/JE_combined_epi_harmony_SCT_renamed_slingshot_pseudotime_knot.png",plot=plotc, width = 10, height = 8)
+```
+
+From the knots in the umap along each lineage, we assumed the
+bifurcation happened between knot1 to knot4.
+
+```{r}
+earlyDERes <- earlyDETest(sce.trade, knots = c(1, 4),pairwise=TRUE)
+```
+
+Still confronted with the error "Error in t(L) %\*% Sigma :
+non-conformable arguments"
+
+```{r}
+earlyDERes <- earlyDETest(sce.trade[-rows_with_fewest_non_missing,], pairwise = TRUE)
+```
+
+We then check the headers
+
+```{r}
+earlyDERes[1:3, ]
+```
+
+We want to see which genes
+
+```{r}
+oPat <- order(earlyDERes$waldStat, 
+              decreasing = TRUE)
+head(rownames(earlyDERes)[oPat])
+```
+
+List the top 10 genes:
+
+```{r}
+rownames(earlyDERes)[oPat][1:10]
+top10_earlyDERes <- rownames(earlyDERes)[oPat][1:10]
+write.csv(top10_earlyDERes, file = "./OutputTable/JE_combined_epi_harmony_SCT_renamed_slingshot_top_10_EarlyDriver_genes_with_different_pattern_among_all_lineages_20220822.csv", row.names = FALSE )
+
+```
+
+We then plot the top10 early driver genes among the four lineages
+
+```{r}
+curvesCols <- c("#619CFF", "#00B9E3","#00BA38","#93AA00")
+    for (gene in top10_earlyDERes) {
+        plot_obj <- plotSmoothers(sce.trade, counts, gene, curvesCols = curvesCols, border = FALSE) +
+                    scale_color_manual(values = curvesCols)
+        
+        # Define filename
+        filename <- paste(output_dir, "Plot_top10_different_early_driver_among_all_lineages", "_", gene, ".png", sep = "")
+        
+        # Save plot to file
+        ggsave(filename, plot = plot_obj, width = 10, height = 5)
+    }
+```
+
+Below, we first write a function to get the top10 genes for a given
+comparison, then we implemented it for each pairwise comparison Here we
+will pick the top 10 early driver genes differentially activated between
+two lineages
+
+```{r}
+# Function to get top 10 genes for a given comparison
+getTopEDGenes <- function(column_name) {
+    o <- order(earlyDERes[[column_name]], decreasing = TRUE)
+    return(names(sce.trade)[o[1:10]])
+}
+
+# Apply the function for each pairwise comparison
+topEDGenes_1vs2 <- getTopGenes("waldStat_1vs2")
+topEDGenes_1vs3 <- getTopGenes("waldStat_1vs3")
+topEDGenes_1vs4 <- getTopGenes("waldStat_1vs4")
+topEDGenes_2vs3 <- getTopGenes("waldStat_2vs3")
+topEDGenes_2vs4 <- getTopGenes("waldStat_2vs4")
+topEDGenes_3vs4 <- getTopGenes("waldStat_3vs4")
+
+# Build the resulting dataframe
+topEDGenes_1v1 <- data.frame(
+    Lineage_1_vs_2 = topEDGenes_1vs2,
+    Lineage_1_vs_3 = topEDGenes_1vs3,
+    Lineage_1_vs_4 = topEDGenes_1vs4,
+    Lineage_2_vs_3 = topEDGenes_2vs3,
+    Lineage_2_vs_4 = topEDGenes_2vs4,
+    Lineage_3_vs_4 = topEDGenes_3vs4
+)
+
+```
+
+```{r}
+head(topEDGenes_1v1)
+```
+
+```{r}
+write.csv(topEDGenes_1v1, file = "./OutputTable/JE_combined_epi_harmony_SCT_renamed_slingshot_top_10_early_driver_genes_between_two_lineages_20220822.csv", row.names = FALSE )
+```
+
+I also want to get the unique genes in each comparison
+
+```{r}
+unique_genes <- lapply(1:ncol(topEDGenes_1v1), function(col_idx) {
+  current_genes <- topEDGenes_1v1[[col_idx]]
+  other_genes <- unlist(topEDGenes_1v1[,-col_idx])
+  unique_genes <- current_genes[!(current_genes %in% other_genes)]
+  return(unique_genes)
+})
+
+names(unique_genes) <- colnames(topEDGenes_1v1)
+```
+
+```{r}
+# Find the maximum number of unique genes for all comparisons
+max_length <- max(sapply(unique_genes, length))
+
+# Function to fill a vector with NAs up to max_length
+fill_NA <- function(vec) {
+  c(vec, rep(NA, max_length - length(vec)))
+}
+
+# Apply the fill_NA function to each vector in unique_genes
+filled_genes <- lapply(unique_genes, fill_NA)
+
+# Convert the list to a dataframe
+unique_genes_df <- as.data.frame(filled_genes)
+
+unique_genes_df
+```
+
+Also,I'll loop through the columns of the topEDGenes_1v1 dataframe and
+adjust the curvesCols according to the comparison. For this, we'll
+create a helper function to determine the appropriate color codes for
+each pairwise comparison: We will save the outputs in png formats.
+
+```{r}
+
+library(ggplot2)
+
+# Function to determine color codes for a given pairwise comparison
+getCurvesCols <- function(comparison) {
+    allCols <- c("#93AA00", "#00BA38", "#00B9E3", "#619CFF")
+    transp1 <- "transparent"
+    transp2 <- "transparent"
+    
+    if (comparison == "Lineage_1_vs_2") return(c(allCols[4], allCols[3], transp1, transp2))
+    if (comparison == "Lineage_1_vs_3") return(c(allCols[4], transp1, allCols[2], transp2))
+    if (comparison == "Lineage_1_vs_4") return(c(allCols[4], transp1, transp2, allCols[1]))
+    if (comparison == "Lineage_2_vs_3") return(c(transp1, allCols[3], allCols[2], transp2))
+    if (comparison == "Lineage_2_vs_4") return(c(transp1, allCols[3], transp2, allCols[1]))
+    if (comparison == "Lineage_3_vs_4") return(c(transp1, transp2, allCols[2], allCols[1]))
+}
+
+# Output directory
+output_dir <- "./OutputFigure/"
+
+# Check if the output directory exists, if not, create it
+if (!dir.exists(output_dir)) {
+    dir.create(output_dir)
+}
+# Loop through the columns of unique_genes_df and plot each gene
+for (comparison in colnames(unique_genes_df)) {
+    curvesCols <- getCurvesCols(comparison)
+    for (gene in unique_genes_df[[comparison]]) {
+        
+        # Omit NA genes
+        if (is.na(gene)) next
+        
+        plot_obj <- plotSmoothers(sce.trade, counts, gene, curvesCols = curvesCols, border = FALSE) +
+                    scale_color_manual(values = curvesCols)
+        
+        # Define filename
+        filename <- paste(output_dir, "Plot_unique_early_driver_gene_", comparison, "_", gene, ".png", sep = "")
+        
+        # Save plot to file
+        ggsave(filename, plot = plot_obj, width = 10, height = 5)
+    }
+}
+
+
+```
+
+```{r}
+
+library(ggplot2)
+
+# Function to determine color codes for a given pairwise comparison
+getCurvesCols <- function(comparison) {
+    allCols <- c("#93AA00", "#00BA38", "#00B9E3", "#619CFF")
+    transp1 <- "transparent"
+    transp2 <- "transparent"
+    
+    if (comparison == "Lineage_1_vs_2") return(c(allCols[4], allCols[3], transp1, transp2))
+    if (comparison == "Lineage_1_vs_3") return(c(allCols[4], transp1, allCols[2], transp2))
+    if (comparison == "Lineage_1_vs_4") return(c(allCols[4], transp1, transp2, allCols[1]))
+    if (comparison == "Lineage_2_vs_3") return(c(transp1, allCols[3], allCols[2], transp2))
+    if (comparison == "Lineage_2_vs_4") return(c(transp1, allCols[3], transp2, allCols[1]))
+    if (comparison == "Lineage_3_vs_4") return(c(transp1, transp2, allCols[2], allCols[1]))
+}
+
+# Output directory
+output_dir <- "./OutputFigure/"
+
+# Check if the output directory exists, if not, create it
+if (!dir.exists(output_dir)) {
+    dir.create(output_dir)
+}
+
+# Loop through the columns of topEDGenes_1v1 and plot each gene
+for (comparison in colnames(topEDGenes_1v1)) {
+    curvesCols <- getCurvesCols(comparison)
+    for (gene in topEDGenes_1v1[[comparison]]) {
+        plot_obj <- plotSmoothers(sce.trade, counts, gene, curvesCols = curvesCols, border = FALSE) +
+                    scale_color_manual(values = curvesCols)
+        
+        # Define filename
+        filename <- paste(output_dir, "Plot_top10_early_driver_gene_", comparison, "_", gene, ".png", sep = "")
+        
+        # Save plot to file
+        ggsave(filename, plot = plot_obj, width = 10, height = 5)
+    }
+}
+
+```
+
+Example for specific comparison
+
+Here we want to compare Lineage 1 vs Lineage 3
+
+```{r}
+oEarly <- order(earlyDERes$waldStat_1vs3, decreasing = TRUE)
+head(rownames(earlyDERes)[oEarly])
+```
+
+```{r}
+rownames(earlyDERes)[oEarly][1:100] # list the top 100 early driver genes differentially activated between lineage 1 and lineage 3
+```
+
+top1
+
+```{r}
+rownames(earlyDERes)[oEarly][1]
+curvesCols <- c("#619CFF", "transparent","#00BA38","transparent")
+plotSmoothers(sce.trade, counts, gene = rownames(earlyDERes)[oEarly][1], curvesCols = curvesCols,
+              border = FALSE) +
+  scale_color_manual(values = curvesCols)
+plotGeneCount(crv, counts, gene = rownames(earlyDERes)[oEarly][1], title=rownames(earlyDERes)[oEarly][1])
+```
+
+top2
+
+```{r}
+curvesCols <- c("#619CFF", "transparent","#00BA38","transparent")
+plotSmoothers(sce.trade, counts, gene = rownames(earlyDERes)[oEarly][2], curvesCols = curvesCols,
+              border = FALSE) +
+  scale_color_manual(values = curvesCols)
+plotGeneCount(crv, counts, gene = rownames(earlyDERes)[oEarly][2], title=rownames(earlyDERes)[oEarly][2])
+```
+
+top3
+
+```{r}
+curvesCols <- c("#619CFF", "transparent","#00BA38","transparent")
+plotSmoothers(sce.trade, counts, gene = rownames(earlyDERes)[oEarly][3], curvesCols = curvesCols,
+              border = FALSE) +
+  scale_color_manual(values = curvesCols)
+plotGeneCount(crv, counts, gene = rownames(earlyDERes)[oEarly][3], title=rownames(earlyDERes)[oEarly][3])
+```
+
+top4
+
+```{r}
+curvesCols <- c("#619CFF", "transparent","#00BA38","transparent")
+plotSmoothers(sce.trade, counts, gene = rownames(earlyDERes)[oEarly][4], curvesCols = curvesCols,
+              border = FALSE) +
+  scale_color_manual(values = curvesCols)
+plotGeneCount(crv, counts, gene = rownames(earlyDERes)[oEarly][4], title=rownames(earlyDERes)[oEarly][4])
+```
+
+top5
+
+```{r}
+curvesCols <- c("#619CFF", "transparent","#00BA38","transparent")
+plotSmoothers(sce.trade, counts, gene = rownames(earlyDERes)[oEarly][5], curvesCols = curvesCols,
+              border = FALSE) +
+  scale_color_manual(values = curvesCols)
+plotGeneCount(crv, counts, gene = rownames(earlyDERes)[oEarly][5], title=rownames(earlyDERes)[oEarly][5])
+```
+
+For a known gene
+
+```{r}
+curvesCols <- c("#619CFF", "transparent","#00BA38","transparent")
+plotSmoothers(sce.trade, counts, gene = "Il24", curvesCols = curvesCols,
+              border = FALSE) +
+  scale_color_manual(values = curvesCols)
+curvesCols_all <- c("#619CFF", "#00B9E3","#00BA38" , "#93AA00")
+plotSmoothers(sce.trade, counts, gene = "Il24", curvesCols = curvesCols_all, border = FALSE) 
+plotGeneCount(crv, counts, gene = "Il24", title="Il24")
+```
+
+```{r}
+curvesCols <- c("#619CFF", "transparent","#00BA38","transparent")
+plotSmoothers(sce.trade, counts, gene = "Gclc", curvesCols = curvesCols,
+              border = FALSE) +
+  scale_color_manual(values = curvesCols)
+curvesCols_all <- c("#619CFF", "#00B9E3","#00BA38" , "#93AA00")
+plotSmoothers(sce.trade, counts, gene = "Gclc", curvesCols = curvesCols_all, border = FALSE) 
+plotGeneCount(crv, counts, gene = "Gclc", title="Gclc")
+```
+
+```{r}
+curvesCols <- c("#619CFF", "transparent","#00BA38","transparent")
+plotSmoothers(sce.trade, counts, gene = "Slc7a11", curvesCols = curvesCols,
+              border = FALSE) +
+  scale_color_manual(values = curvesCols)
+curvesCols_all <- c("#619CFF", "#00B9E3","#00BA38" , "#93AA00")
+plotSmoothers(sce.trade, counts, gene = "Slc7a11", curvesCols = curvesCols_all, border = FALSE) 
+plotGeneCount(crv, counts, gene = "Slc7a11", title="Slc7a11")
+```
+
+```{r}
+curvesCols <- c("#619CFF", "transparent","#00BA38","transparent")
+plotSmoothers(sce.trade, counts, gene = "Slc1a5", curvesCols = curvesCols,
+              border = FALSE) +
+  scale_color_manual(values = curvesCols)
+curvesCols_all <- c("#619CFF", "#00B9E3","#00BA38" , "#93AA00")
+plotSmoothers(sce.trade, counts, gene = "Slc1a5", curvesCols = curvesCols_all, border = FALSE) 
+plotGeneCount(crv, counts, gene = "Slc1a5", title="Slc1a5")
+```
+
+OK, let's make a loop for the top10 early driver genes between lineage 1
+and lineage 3
+
+```{r}
+for (i in rownames(earlyDERes)[oEarly][1:10]){
+  i
+  curvesCols <- c("#619CFF", "transparent","#00BA38","transparent")
+  print(
+    plotSmoothers(sce.trade, counts, gene = i, curvesCols = curvesCols,border = FALSE) + scale_color_manual(values = curvesCols)
+  )
+  print(
+    plotGeneCount(crv, counts, gene = i, title=i)
+  )
+}
+```
+
+## 1.3.3.4 Bifurcation heatmap for early driver genes among lineage 1 and 3.
+
+However, we want to know if there are any trends cluster along the
+bifurcation.Using hybrid heatmap function, we are trying to see if
+slingshot+tradeseq could replace BEAM in monocle2. For instance, we want
+to check the trends of the top 200 genes in 100 pseudotime intervals.
+Immediately after the last part, the oEarly indicate the early driver
+genes differentially activated in lineage 1 or lineage 3. Here we want
+to compare Lineage 1 vs Lineage 3. And we will repeat some of the
+command lines in the last part.
+
+```{r}
+oEarly <- order(earlyDERes$waldStat_1vs3, decreasing = TRUE) # get the most differentially activated genes between lineage 1 and lineage 3
+head(rownames(earlyDERes)[oEarly])
+```
+
+```{r}
+rownames(earlyDERes)[oEarly][1:100] # list the top 100 early driver genes differentially activated between lineage 1 and lineage 3
+```
+
+```{r}
+yhatSmooth_false <- predictSmooth(sce.trade, gene = rownames(earlyDERes)[oEarly][1:200], #top 200 genes
+                                  nPoints = 100, #idealy, I would use 30-100, larger number will make the scale effect not that significant
+                                  tidy = FALSE)
+
+```
+
+Since we know that the matrix counts were arranged along the pseudotime,
+and we generate the oEarly by the Waldtest between lineage 1 and 3, we
+subset and re-arrange the count matrix to generate heatmap using the
+hybrid line below:
+
+```{r,fig.height=30, fig.width=20}
+heatSmooth <- pheatmap(t(scale(t(yhatSmooth_false[, c(100:1,201:300)]))), # yhatSmooth_false we used nPoints=100, so we choose 1:100 and 201:300 for lineage 1 and 3 respectively
+                       cluster_cols = FALSE,
+                       show_rownames = TRUE, 
+                       show_colnames = TRUE,
+                       border_color = FALSE)
+ggsave("./OutputFigure/JE_combined_epi_harmony_SCT_renamed_slingshot_tradeSeq_lineage_1_vs3_bifurcation_heatmap.png", plot=heatSmooth, width = 10, height = 25)
+```
+
+If you don't want to cluster rows, rownames for the genes were listed
+according to the value of waldTest in a decreasing manner.
+
+```{r,fig.height=30, fig.width=20}
+heatSmooth_2 <- pheatmap(t(scale(t(yhatSmooth_false[, c(100:1,201:300)]))), # yhatSmooth_false we used nPoints=100, so we choose 1:100 and 201:300 for lineage 1 and 3 respectively
+                       cluster_cols = FALSE,
+                       cluster_rows = FALSE,
+                       show_rownames = TRUE, 
+                       show_colnames = TRUE,
+                       border_color = FALSE)
+ggsave("./OutputFigure/JE_combined_epi_harmony_SCT_renamed_slingshot_tradeSeq_lineage_1_vs3_bifurcation_heatmap_unclustered.png", plot=heatSmooth_2, width = 10, height = 25)
+```
+
+Here, I'm just not certain about the WaldTest value, so I filter the
+genes using the p value.And compare the heatmaps.
+
+First, we regenerate the oEarly order as below: Here we want to compare
+Lineage 1 vs Lineage 3
+
+```{r}
+earlyDERes_p <- earlyDERes[earlyDERes$pvalue_1vs3<0.001,]
+dim(earlyDERes_p)
+oEarly_2 <- order(earlyDERes_p$waldStat_1vs3, decreasing = TRUE)
+head(rownames(earlyDERes_p)[oEarly_2])
+```
+
+```{r}
+yhatSmooth_false <- predictSmooth(sce.trade, gene = rownames(earlyDERes_p)[oEarly_2][1:200], nPoints = 100, tidy = FALSE)
+
+```
+
+Since we know that the matrix counts were arranged along the pseudotime,
+and we generate the oEarly by the Waldtest between lineage 1 and 3, we
+subset and re-arrange the count matrix to generate heatmap using the
+hybrid line below:
+
+```{r,fig.height=30, fig.width=20}
+heatSmooth <- pheatmap(t(scale(t(yhatSmooth_false[, c(100:1,201:300)]))), # yhatSmooth_false we used nPoints=100, so we choose 1:100 and 201:300 for lineage 1 and 3 respectively
+                       cluster_cols = FALSE,
+                       show_rownames = TRUE, 
+                       show_colnames = TRUE,
+                       border_color = FALSE)
+```
+
+If you don't want to cluster them,
+
+```{r,fig.height=30, fig.width=20}
+heatSmooth_2 <- pheatmap(t(scale(t(yhatSmooth_false[, c(100:1,201:300)]))), # yhatSmooth_false we used nPoints=100, so we choose 1:100 and 201:300 for lineage 1 and 3 respectively
+                       cluster_cols = FALSE,
+                       cluster_rows = FALSE,
+                       show_rownames = TRUE, 
+                       show_colnames = TRUE,
+                       border_color = FALSE)
+```
+
+##1.3.3.5 Loop for Bifurcation heatmap
+
+```{r,fig.height=30, fig.width=20}
+# Define the different comparisons based on the naming pattern in earlyDERes
+comparisons <- c("1vs3", "1vs4", "1vs2", "2vs3", "2vs4", "3vs4")
+
+# Output directory
+output_dir <- "./OutputFigure/"
+
+# Check if the output directory exists, if not, create it
+if (!dir.exists(output_dir)) {
+    dir.create(output_dir)
+}
+
+for (comp in comparisons) {
+    # Order by the waldStat column for this comparison
+    waldStat_col <- paste0("waldStat_", comp)
+    oEarly <- order(earlyDERes[[waldStat_col]], decreasing = TRUE)
+    
+    # Predict smooth values
+    yhatSmooth_false <- predictSmooth(sce.trade, gene = rownames(earlyDERes)[oEarly][1:200], nPoints = 100, tidy = FALSE)
+    
+    # Calculate the columns to extract based on current lineage comparison
+    lineages <- as.numeric(strsplit(comp, "vs")[[1]])
+    idx1 <- seq(lineages[1]*100, by = -1, length.out = 100)
+    idx2 <- seq((lineages[2]-1)*100 + 1, lineages[2]*100)
+    
+    # Generate the heatmaps
+    heatSmooth <- pheatmap(t(scale(t(yhatSmooth_false[, c(idx1, idx2)]))),
+                           cluster_cols = FALSE,
+                           show_rownames = TRUE, 
+                           show_colnames = TRUE,
+                           border_color = FALSE)
+    
+    # Save the clustered heatmap
+    filename <- paste(output_dir, "JE_combined_epi_harmony_SCT_renamed_slingshot_tradeSeq_lineage_", comp, "_bifurcation_heatmap.png", sep = "")
+    ggsave(filename, plot = heatSmooth, width = 10, height = 25)
+    
+    # Generate the unclustered heatmap
+    heatSmooth_2 <- pheatmap(t(scale(t(yhatSmooth_false[, c(idx1, idx2)]))),
+                             cluster_cols = FALSE,
+                             cluster_rows = FALSE,
+                             show_rownames = TRUE, 
+                             show_colnames = TRUE,
+                             border_color = FALSE)
+    
+    # Save the unclustered heatmap
+    filename_2 <- paste(output_dir, "JE_combined_epi_harmony_SCT_renamed_slingshot_tradeSeq_lineage_", comp, "_bifurcation_heatmap_unclustered.png", sep = "")
+    ggsave(filename_2, plot = heatSmooth_2, width = 10, height = 25)
+}
+
+```
+
+If considering the p value threshold
+
+```{r,fig.height=30, fig.width=20}
+# Define the different comparisons based on the naming pattern in earlyDERes
+comparisons <- c("1vs3", "1vs4", "1vs2", "2vs3", "2vs4", "3vs4")
+
+# Output directory
+output_dir <- "./OutputFigure/"
+
+# Check if the output directory exists, if not, create it
+if (!dir.exists(output_dir)) {
+    dir.create(output_dir)
+}
+
+for (comp in comparisons) {
+    # Filter and order by the waldStat column for this comparison
+    waldStat_col <- paste0("waldStat_", comp)
+    pvalue_col <- paste0("pvalue_", comp)
+    
+    earlyDERes_filtered <- earlyDERes[earlyDERes[[pvalue_col]] < 0.001, ]
+    
+    # Get the number of genes that pass the p-value threshold
+    num_genes <- nrow(earlyDERes_filtered)
+    
+    # Use the minimum of 200 or the number of genes that passed the threshold
+    genes_to_use <- min(200, num_genes)
+    
+    oEarly <- order(earlyDERes_filtered[[waldStat_col]], decreasing = TRUE)
+    
+    # Predict smooth values
+    yhatSmooth_false <- predictSmooth(sce.trade, gene = rownames(earlyDERes_filtered)[oEarly][1:genes_to_use], nPoints = 100, tidy = FALSE)
+    
+    # Calculate the columns to extract based on current lineage comparison
+    lineages <- as.numeric(strsplit(comp, "vs")[[1]])
+    idx1 <- seq(lineages[1]*100, by = -1, length.out = 100)
+    idx2 <- seq((lineages[2]-1)*100 + 1, lineages[2]*100)
+    
+    # Generate the heatmaps
+    heatSmooth <- pheatmap(t(scale(t(yhatSmooth_false[, c(idx1, idx2)]))),
+                           cluster_cols = FALSE,
+                           show_rownames = TRUE, 
+                           show_colnames = TRUE,
+                           border_color = FALSE)
+    
+    # Save the clustered heatmap
+    filename <- paste(output_dir, "JE_combined_epi_harmony_SCT_renamed_slingshot_tradeSeq_lineage_", comp, "_bifurcation_heatmap.png", sep = "")
+    ggsave(filename, plot = heatSmooth, width = 10, height = 25)
+    
+    # Generate the unclustered heatmap
+    heatSmooth_2 <- pheatmap(t(scale(t(yhatSmooth_false[, c(idx1, idx2)]))),
+                             cluster_cols = FALSE,
+                             cluster_rows = FALSE,
+                             show_rownames = TRUE, 
+                             show_colnames = TRUE,
+                             border_color = FALSE)
+    
+    # Save the unclustered heatmap
+    filename_2 <- paste(output_dir, "JE_combined_epi_harmony_SCT_renamed_slingshot_tradeSeq_lineage_", comp, "_bifurcation_heatmap_unclustered.png", sep = "")
+    ggsave(filename_2, plot = heatSmooth_2, width = 10, height = 25)
+}
+
+
+```
+
+## 2.x Save Rdata
+
+```{r}
+save(sce.trade, #sce fitGAM
+     assoRes, # lineage associated genes
+     earlyDERes, # lineage specific driver genes between lineages
+     startRes,#progenitor marker genes within all lineages
+     startRes_all, #progenitor marker genes within each lineages
+     customRes, # lineage specific genes within a specific pseudotime point of a specific lineage
+     endRes, # differentiated cell type markers between lineages
+     patternRes, ##  genes with different expression patterns
+     file = "./SeuratObject/JE_combined_epi_harmony_SCT_renamed_slingshot_tradeSeq.Rdata")
+```
+
+
+## 2.y Plot
+```{r, marker for cluster krt,fig.height=12, fig.width=10}
+library(RColorBrewer)
+DefaultAssay(seu) <- "SCT"
+FeaturePlot(seu, features = c("Odam","Nedd4",
+                                          "Klk10", "Atp1a1", "Sbsn","Fam57a"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1,  label=TRUE)+xlim(-7,7)+ylim(-7,7)
+#ggsave("./OutputFigure/palate_epi_MAGIC_periderm_MAGIC_tf_feature_MAGIC.png",  width = 10, height = 24)
+```
+```{r, marker for cluster krt,fig.height=24, fig.width=15}
+DefaultAssay(seu) <- "MAGIC_SCT"
+FeaturePlot(seu, features = c("Odam","Nedd4",
+                                          "Klk10", "Atp1a1", "Sbsn","Fam57a"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1, split.by = "orig.ident", label=TRUE)+xlim(-7,7)+ylim(-7,7)
+#ggsave("./OutputFigure/palate_epi_MAGIC_periderm_MAGIC_pe7_feature_MAGIC.png",  width = 10, height = 24)
+```
+```{r, marker for cluster krt,fig.height=24, fig.width=15}
+DefaultAssay(seu) <- "MAGIC_SCT"
+FeaturePlot(seu, features = c("Odam","Nedd4",
+                                          "Krtadp", "Krt5", "Krt14","Lor"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1, split.by = "orig.ident", label=TRUE)+xlim(-7,7)+ylim(-7,7)
+#ggsave("./OutputFigure/palate_epi_MAGIC_periderm_MAGIC_pe7_feature_MAGIC.png",  width = 10, height = 24)
+```
+
