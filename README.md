@@ -15,25 +15,25 @@ This repository contains code and analysis scripts for the paper "A p63-dependen
 - `ATAC_oneClick_mm10_xiyou_v1.1.sh`: Shell script for ATAC-seq data processing
 - `gingiva_palate_LY_ATAC_0503_output.txt`: Example output from ATAC-seq mapping
 
-### Figure_1_related/
-- `Figure_1_plots.Rmd`: R Markdown for generating Figure 1 plots
-
 ### Figure_2_related/
-- `Figure_2_plots.Rmd`: R Markdown for Figure 2 plots
+- `Figure_2_plots.Rmd`: R Markdown for generating Figure 2 plots
+
+### Figure_3_related/
+- `Figure_3_plots.Rmd`: R Markdown for Figure 3 plots
 - `Integrate_JE_epi_harmony_imputation_3D.Rmd`: Integration and imputation of JE epithelial cells
 - `Integrate_JE_epi_harmony_imputation_pseudotime_slingshot_2.Rmd`: Pseudotime analysis using Slingshot
 - `scVelo_integrated_JE_epi_dynamic_model.ipynb`: Jupyter notebook for scVelo dynamic modeling
 
-### Figure_4_related/
+### Figure_5_related/
 Contains scripts for spatial transcriptomics and trajectory analyses:
 - Spatial analysis scripts: `3.9_spatial.R`, `3.14_spatial_Bayes.R`, `4.5_space_bayes_prepare.R`, `4.6_spatialDE.ipynb`
 - Trajectory analysis: `4.15_TrajAtlas_GEP.ipynb`
 - Gene expression programs: `6.14_aucell.ipynb`, `6.18_wound_go.R`
-- Figure generation: `9.23_figure4_revision.R`, `Figure4B.R`, `Figure4C.R`
+- Figure generation: `9.23_figure5_revision.R`, `Figure5B.R`, `Figure5C.R`
 - Shiny app preparation: `shinyPrepare.R`
 
 ### Figure_6_related/
-- `Figure_5_scRNA_plots.Rmd`: R Markdown for generating Figure 6 single-cell RNA-seq plots
+- `Figure_6_plots.Rmd`: R Markdown for generating Figure 6 single-cell RNA-seq plots
 
 ## Requirements
 
