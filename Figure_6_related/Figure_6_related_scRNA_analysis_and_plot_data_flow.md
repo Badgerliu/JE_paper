@@ -1,6 +1,6 @@
 # Single-cell RNA Analysis Data Flow Documentation 
 
-# For Figure 5 scRNA-seq data
+# For Figure 6 scRNA-seq data
 
 # (Arranged by Execution Order)
 
@@ -40,17 +40,17 @@
 
 ---
 
-## Figure_5_plots.Rmd
+## Figure_6_plots.Rmd
 
 ### Input Data
-- `./Figure5_scRNA_part/Figure5_scRNA_part.Rdata` (Cache data)
+- `./Figure6_scRNA_part/Figure6_scRNA_part.Rdata` (Cache data)
 - `./SeuratObject/JE_combined_epi_harmony_SCT_renamed_slingshot_tradeSeq.Rdata` (From 7_Integrate)
 - `./SeuratObject/JE_combined_epi_harmony_MAGIC_renamed.rds` (From 3_Integrate)
 - `./SeuratObject/JE_combined_epi_harmony_SCT_renamed_renamed_sce.Rdata` (From 4_Integrate)
 
 ### Output RDS
-- `./Figure5_scRNA_part/Figure5_scRNA_part.Rdata` (Updated cache data)
-- Various plot files in `./Figure5_scRNA_part/` directory
+- `./Figure6_scRNA_part/Figure6_scRNA_part.Rdata` (Updated cache data)
+- Various plot files in `./Figure6_scRNA_part/` directory
 
 ---
 
@@ -82,12 +82,12 @@ graph TB
         process3 --> tradeseq[JE_combined_epi_harmony_SCT_renamed_slingshot_tradeSeq.Rdata]
     end
 
-    %% Figure_5 input integration
-    subgraph sg4["Figure_5_plots.Rmd"]
-        magic -->|Imputed data| fig5[Figure 5<br/>visualization]
+    %% Figure_6 input integration
+    subgraph sg4["Figure_6_plots.Rmd"]
+        magic -->|Imputed data| fig5[Figure 6<br/>visualization]
         sce -->|SCE object| fig5
         tradeseq -->|Gene expression<br/>patterns| fig5
-        fig5 -->|Output plots| plots[Figure 5 plots]
+        fig5 -->|Output plots| plots[Figure 6 plots]
     end
 
     %% Style settings

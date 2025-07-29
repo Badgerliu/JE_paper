@@ -43,16 +43,16 @@
 
 ---
 
-## Figure_1_plots.Rmd
+## Figure_2_plots.Rmd
 
 ### Input Data
 - `./SeuratObject/JE_combined_harmony_20221128.rds` (From 1_Integrate)
 - `./SeuratObject/JE_combined_epi_harmony_MAGIC_renamed.rds` (From 3_Integrate)
 - `./SeuratObject/perio_seurat_20221008.rds` (External reference data)
-- `./Figure1_scRNA_part/Figure1_scRNA_part.Rdata` (Cache data)
+- `./Figure2_scRNA_part/Figure2_scRNA_part.Rdata` (Cache data)
 
 ### Output RDS
-- `./Figure1_scRNA_part/Figure1_scRNA_part.Rdata`
+- `./Figure2_scRNA_part/Figure2_scRNA_part.Rdata`
 
 ---
 
@@ -78,12 +78,12 @@ graph TB
         process3 --> magic[JE_epi_MAGIC.rds]
     end
 
-    %% Figure_1 input integration
-    subgraph sg4["Figure_1_plots.Rmd"]
-        harmony -->|Main data| fig1[Figure 1<br/>visualization]
+    %% Figure_2 input integration
+    subgraph sg4["Figure_2_plots.Rmd"]
+        harmony -->|Main data| fig1[Figure 2<br/>visualization]
         magic -->|Imputed data| fig1
         ext[perio_seurat.rds] -->|Reference data| fig1
-        cache[Figure1_cache.Rdata] -->|Cache| fig1
+        cache[Figure2_cache.Rdata] -->|Cache| fig1
     end
 
     %% Style settings

@@ -1,6 +1,6 @@
-# p63-RUNX1-ODAM Axis in Junctional Epithelium Repair
+# A p63-dependent molecular switch directs epithelial fate to form a specialized seal at the tooth-gingiva interface
 
-This repository contains code and analysis scripts for the paper "p63-RUNX1-ODAM Axis is Essential for Junctional Epithelium Repair". The code is organized by figure and analysis type.
+This repository contains code and analysis scripts for the paper "A p63-dependent molecular switch directs epithelial fate to form a specialized seal at the tooth-gingiva interface". The code is organized by figure and analysis type.
 
 ## Repository Structure
 
@@ -32,8 +32,8 @@ Contains scripts for spatial transcriptomics and trajectory analyses:
 - Figure generation: `9.23_figure4_revision.R`, `Figure4B.R`, `Figure4C.R`
 - Shiny app preparation: `shinyPrepare.R`
 
-### Figure_5_related/
-- `Figure_5_scRNA_plots.Rmd`: R Markdown for generating Figure 5 single-cell RNA-seq plots
+### Figure_6_related/
+- `Figure_5_scRNA_plots.Rmd`: R Markdown for generating Figure 6 single-cell RNA-seq plots
 
 ## Requirements
 

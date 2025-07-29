@@ -1,6 +1,6 @@
 # Single-cell RNA Analysis Data Flow Documentation 
 
-# For Figure 2 JE scRNA-seq data
+# For Figure 3 JE scRNA-seq data
 
 # (Arranged by Execution Order)
 
@@ -63,7 +63,7 @@
 
 ---
 
-## Figure_2_plots.Rmd
+## Figure_3_plots.Rmd
 
 ### Input Data
 - `./SeuratObject/JE_combined_epi_harmony_MAGIC_renamed.rds`
@@ -72,7 +72,7 @@
 - RNA velocity analysis results
 
 ### Output
-- Figure 2 visualization plots and statistical analysis results
+- Figure 3 visualization plots and statistical analysis results
 
 ---
 
@@ -125,9 +125,9 @@ graph TB
         process5 --> epi[JE_K5_combined_epi_harmony.rds]
     end
 
-    %% Figure_2 input integration
-    subgraph sg6["Figure_2_plots.Rmd"]
-        magic1 -->|MAGIC data| fig2[Figure 2<br/>visualization]
+    %% Figure_3 input integration
+    subgraph sg6["Figure_3_plots.Rmd"]
+        magic1 -->|MAGIC data| fig2[Figure 3<br/>visualization]
         epi -->|K5 lineage data| fig2
         trajectory -->|Pseudotime data| fig2
         scvelo -->|Velocity data| fig2

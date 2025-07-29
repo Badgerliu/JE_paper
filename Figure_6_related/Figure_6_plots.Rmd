@@ -1,5 +1,5 @@
 ---
-title: "Figure5_plot"
+title: "Figure6_plot"
 author: "Huan Liu"
 date: "2024-06-12"
 output: html_document
@@ -58,7 +58,7 @@ source("./PseudotimeAnalysis.r")
 set.seed(12)
 theme_set(theme_bw())
 
-load(file = "./Figure5_scRNA_part/Figure5_scRNA_part.Rdata")
+load(file = "./Figure6_scRNA_part/Figure6_scRNA_part.Rdata")
 #load(file = "./SeuratObject/JE_combined_epi_harmony_SCT_renamed_slingshot_tradeSeq.Rdata")
 #load(file = "./SeuratObject/JE_combined_epi_harmony_SCT_renamed_renamed_sce.Rdata")
 #seu <- readRDS(file = "./SeuratObject/JE_combined_epi_harmony_MAGIC_renamed.rds")
@@ -124,7 +124,7 @@ List the top 10 genes:
 ```{r,list top 10 genes}
 rownames(earlyDERes)[oPat][1:10]
 top10_earlyDERes <- rownames(earlyDERes)[oPat][1:10]
-write.csv(top10_earlyDERes, file = "./Figure5_scRNA_part/JE_combined_epi_harmony_SCT_renamed_slingshot_top_10_EarlyDriver_genes_with_different_pattern_among_all_lineages_20220822.csv", row.names = FALSE )
+write.csv(top10_earlyDERes, file = "./Figure6_scRNA_part/JE_combined_epi_harmony_SCT_renamed_slingshot_top_10_EarlyDriver_genes_with_different_pattern_among_all_lineages_20220822.csv", row.names = FALSE )
 
 ```
 
@@ -183,7 +183,7 @@ head(topEDGenes_1v1)
 ```
 
 ```{r,list top10 genes}
-write.csv(topEDGenes_1v1, file = "./Figure5_scRNA_part/JE_combined_epi_harmony_SCT_renamed_slingshot_top_10_early_driver_genes_between_two_lineages_20220822.csv", row.names = FALSE )
+write.csv(topEDGenes_1v1, file = "./Figure6_scRNA_part/JE_combined_epi_harmony_SCT_renamed_slingshot_top_10_early_driver_genes_between_two_lineages_20220822.csv", row.names = FALSE )
 ```
 
 I also want to get the unique genes in each comparison
@@ -241,7 +241,7 @@ getCurvesCols <- function(comparison) {
 }
 
 # Output directory
-output_dir <- "./Figure5_scRNA_part/"
+output_dir <- "./Figure6_scRNA_part/"
 
 # Check if the output directory exists, if not, create it
 if (!dir.exists(output_dir)) {
@@ -288,7 +288,7 @@ getCurvesCols <- function(comparison) {
 }
 
 # Output directory
-output_dir <- "./Figure5_scRNA_part/"
+output_dir <- "./Figure6_scRNA_part/"
 
 # Check if the output directory exists, if not, create it
 if (!dir.exists(output_dir)) {
@@ -349,7 +349,7 @@ heatSmooth <- pheatmap(t(scale(t(yhatSmooth_false[, c(100:1,201:300)]))), # yhat
                        show_rownames = TRUE, 
                        show_colnames = TRUE,
                        border_color = FALSE)
-ggsave("./Figure5_scRNA_part/JE_combined_epi_harmony_SCT_renamed_slingshot_tradeSeq_lineage_1_vs3_bifurcation_heatmap.pdf", plot=heatSmooth, width = 10, height = 25)
+ggsave("./Figure6_scRNA_part/JE_combined_epi_harmony_SCT_renamed_slingshot_tradeSeq_lineage_1_vs3_bifurcation_heatmap.pdf", plot=heatSmooth, width = 10, height = 25)
 ```
 
 
@@ -380,7 +380,7 @@ heatSmooth <- pheatmap(data_matrix,
                        annotation_colors = row_annotation_colors)
 
 # Save the plot
-ggsave("./Figure5_scRNA_part/JE_combined_epi_harmony_SCT_renamed_slingshot_tradeSeq_lineage_1_vs3_bifurcation_heatmap_p_test.pdf", plot=heatSmooth, width = 10, height = 25)
+ggsave("./Figure6_scRNA_part/JE_combined_epi_harmony_SCT_renamed_slingshot_tradeSeq_lineage_1_vs3_bifurcation_heatmap_p_test.pdf", plot=heatSmooth, width = 10, height = 25)
 
 ```
 Export the cut tree results (k=6)
@@ -393,7 +393,7 @@ newOrder[,ncol(newOrder)+1] = row_cluster[match(rownames(newOrder),names(row_clu
 colnames(newOrder)[ncol(newOrder)] = "Cluster"
 
 ## export the results
-write.table(newOrder, "./Figure5_scRNA_part/JE_combined_epi_SCT_renamed_slingshot_tradeseq_1vs3_DEarly_bifurcation.csv", quote=F, row.names =T, col.names =T, sep ='\t')
+write.table(newOrder, "./Figure6_scRNA_part/JE_combined_epi_SCT_renamed_slingshot_tradeseq_1vs3_DEarly_bifurcation.csv", quote=F, row.names =T, col.names =T, sep ='\t')
 ```
 
 
@@ -568,7 +568,7 @@ for(cluster in 1:6) {
     # Print the plot
     print(plot)
     # Save the plot
-    file_name <- paste0("./Figure5_scRNA_part/JE_epi_harmony_imputation_slingshot_ED_bifurcation_lineage_1_vs_3_cluster", cluster, ".pdf")
+    file_name <- paste0("./Figure6_scRNA_part/JE_epi_harmony_imputation_slingshot_ED_bifurcation_lineage_1_vs_3_cluster", cluster, ".pdf")
     ggsave(file_name, plot = plot, device = "pdf", width = 11, height = 8.5)
 
 }
@@ -610,8 +610,8 @@ source("./PseudotimeAnalysis.r")
 set.seed(12)
 theme_set(theme_bw())
 
-load(file = "./Figure5_scRNA_part/Figure5_scRNA_part.Rdata")
-module_gene <- read.csv("./Figure5_scRNA_part/JE_combined_epi_SCT_renamed_slingshot_tradeseq_1vs3_DEarly_bifurcation.csv",sep="\t")
+load(file = "./Figure6_scRNA_part/Figure6_scRNA_part.Rdata")
+module_gene <- read.csv("./Figure6_scRNA_part/JE_combined_epi_SCT_renamed_slingshot_tradeseq_1vs3_DEarly_bifurcation.csv",sep="\t")
 ```
 
 
@@ -660,7 +660,7 @@ for (i in unique(module_gene_list$Cluster)) {
 # Filter significant terms
 Module_GO <- Module_GO[which(Module_GO$qvalue <= 0.05),]
 #Module_GO <- Module_GO[, c("ID", "Description", "qvalue", "cluster", "geneID")]
-write.csv(Module_GO, file = './Figure5_scRNA_part/Module_GO.csv')
+write.csv(Module_GO, file = './Figure6_scRNA_part/Module_GO.csv')
 
 ```
 
@@ -671,7 +671,7 @@ curvesCols <- c("#619CFF", "transparent","#00BA38","transparent")
 plotSmoothers(sce.trade, counts, "Trp63", curvesCols = curvesCols,size=1/10,
               border = FALSE) +  xlim(0,15) +ylim(0,6)+
   scale_color_manual(values = curvesCols)
-ggsave("./Figure5_scRNA_part/Plot_Trp63_lineage1vs3.pdf",  width = 15, height = 5)
+ggsave("./Figure6_scRNA_part/Plot_Trp63_lineage1vs3.pdf",  width = 15, height = 5)
 ```
 ##4.2 Runx1 smooth plot
 ```{r}
@@ -679,7 +679,7 @@ curvesCols <- c("#619CFF", "transparent","#00BA38","transparent")
 plotSmoothers(sce.trade, counts, "Runx1", curvesCols = curvesCols,size=1/10,
               border = FALSE) +  xlim(0,15) +ylim(0,6)+
   scale_color_manual(values = curvesCols)
-ggsave("./Figure5_scRNA_part/Plot_Runx1_lineage1vs3.pdf",  width = 15, height = 5)
+ggsave("./Figure6_scRNA_part/Plot_Runx1_lineage1vs3.pdf",  width = 15, height = 5)
 ```
 
 
@@ -756,7 +756,7 @@ ggplot() +
     panel.grid = element_blank(),  # remove grid
     panel.border = element_rect(color = "black", fill = NA, size = 1)  # add black border
   )
-ggsave("./Figure5_scRNA_part/JE_K5_epi_Trp63_umap.pdf")
+ggsave("./Figure6_scRNA_part/JE_K5_epi_Trp63_umap.pdf")
 ```
 
 ## Klf4
@@ -810,7 +810,7 @@ ggplot() +
     panel.grid = element_blank(),  
     panel.border = element_rect(color = "black", fill = NA, size = 1)  
   )
-ggsave("./Figure5_scRNA_part/JE_K5_epi_Klf4_umap.pdf")
+ggsave("./Figure6_scRNA_part/JE_K5_epi_Klf4_umap.pdf")
 ```
 
 ## Itga3
@@ -864,7 +864,7 @@ ggplot() +
     panel.grid = element_blank(),  
     panel.border = element_rect(color = "black", fill = NA, size = 1)  
   )
-ggsave("./Figure5_scRNA_part/JE_K5_epi_Itga3_umap.pdf")
+ggsave("./Figure6_scRNA_part/JE_K5_epi_Itga3_umap.pdf")
 ```
 
 ## Itgb1
@@ -918,7 +918,7 @@ ggplot() +
     panel.grid = element_blank(), 
     panel.border = element_rect(color = "black", fill = NA, size = 1) 
   )
-ggsave("./Figure5_scRNA_part/JE_K5_epi_Itgb1_umap.pdf")
+ggsave("./Figure6_scRNA_part/JE_K5_epi_Itgb1_umap.pdf")
 ```
 
 ## Runx1
@@ -971,7 +971,7 @@ ggplot() +
     panel.grid = element_blank(),  
     panel.border = element_rect(color = "black", fill = NA, size = 1) 
   )
-ggsave("./Figure5_scRNA_part/JE_K5_epi_Runx1_umap.pdf")
+ggsave("./Figure6_scRNA_part/JE_K5_epi_Runx1_umap.pdf")
 ```
 
 
@@ -996,7 +996,7 @@ save(sce_dm, #sce in diffusion map
      patternRes, ##  genes with different expression patterns
      module_gene, ## different cluster of genes in bifurcation heatmap
      Module_GO, ## GO annotation for different cluster of genes in bifurcation heatmap
-     file = "./Figure5_scRNA_part/Figure5_scRNA_part.Rdata")
+     file = "./Figure6_scRNA_part/Figure6_scRNA_part.Rdata")
 ```
 
 ```{r}

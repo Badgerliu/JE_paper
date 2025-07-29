@@ -1,6 +1,6 @@
 # JE Paper scRNA-seq Analysis and Plot Data Flow
 
-This document summarizes the data flow for single-cell RNA sequencing analysis across Figures 1, 2, and 5 of the JE paper.
+This document summarizes the data flow for single-cell RNA sequencing analysis across Figures 2, 3, and 6 of the JE paper.
 
 ## Overview of Analysis Workflow
 
@@ -13,7 +13,7 @@ The scRNA-seq analysis workflow consists of several key steps:
 6. Differential gene expression analysis along trajectories using tradeSeq
 7. Figure-specific visualizations
 
-## Figure 1: 1st JE scRNA-seq Analysis
+## Figure 2: 1st JE scRNA-seq Analysis
 
 ### Analysis Scripts
 1. **1_Integrate_1st_JE_harmony_celltype_annotation.Rmd**
@@ -31,12 +31,12 @@ The scRNA-seq analysis workflow consists of several key steps:
    - **Output**: MAGIC imputed data (`JE_combined_epi_harmony_MAGIC_renamed.rds`, `JE_combined_epi_MAGIC_3D.rds`, etc.)
    - **Process**: MAGIC imputation for gene expression smoothing
 
-4. **Figure_1_plots.Rmd**
+4. **Figure_2_plots.Rmd**
    - **Input**: `JE_combined_harmony_20221128.rds`, `JE_combined_epi_harmony_MAGIC_renamed.rds`, `perio_seurat_20221008.rds`
-   - **Output**: Figure 1 visualization plots
-   - **Process**: Generation of UMAP, feature plots, and other visualizations for Figure 1
+   - **Output**: Figure 2 visualization plots
+   - **Process**: Generation of UMAP, feature plots, and other visualizations for Figure 2
 
-## Figure 2: JE scRNA-seq Analysis with K5 Lineage Tracing
+## Figure 3: JE scRNA-seq Analysis with K5 Lineage Tracing
 
 ### Analysis Scripts
 1. **JE_K5mTmG Seurat Object Generation**
@@ -68,12 +68,12 @@ The scRNA-seq analysis workflow consists of several key steps:
    - **Output**: `JE_K5_combined_epi_harmony.rds`
    - **Process**: Epithelial-specific analysis of K5 lineage data
 
-7. **Figure_2_plots.Rmd**
+7. **Figure_3_plots.Rmd**
    - **Input**: MAGIC data, K5 lineage data, pseudotime data, velocity data
-   - **Output**: Figure 2 visualization plots
-   - **Process**: Generation of visualizations for Figure 2
+   - **Output**: Figure 3 visualization plots
+   - **Process**: Generation of visualizations for Figure 3
 
-## Figure 5: Gene Expression Dynamics Analysis
+## Figure 6: Gene Expression Dynamics Analysis
 
 ### Analysis Scripts
 1. **3_Integrate_1st_JE_epi_harmony_imputation_3D.Rmd**
@@ -91,9 +91,9 @@ The scRNA-seq analysis workflow consists of several key steps:
    - **Output**: tradeSeq analysis results (`JE_combined_epi_harmony_SCT_renamed_slingshot_tradeSeq.Rdata`)
    - **Process**: Differential expression analysis along trajectories
 
-4. **Figure_5_plots.Rmd**
+4. **Figure_6_plots.Rmd**
    - **Input**: MAGIC data, Slingshot objects, tradeSeq results
-   - **Output**: Figure 5 visualization plots
+   - **Output**: Figure 6 visualization plots
    - **Process**: Generation of visualizations for gene expression dynamics
 
 ## Integrated Data Flow Diagram
@@ -127,17 +127,17 @@ graph TB
     epi_subset --> velocity[RNA velocity<br/>analysis]
     
     %% Figure outputs
-    magic --> fig1[Figure 1<br/>visualizations]
-    harmony --> fig1
-    
     magic --> fig2[Figure 2<br/>visualizations]
-    k5_epi --> fig2
-    pseudotime --> fig2
-    velocity --> fig2
+    harmony --> fig2
     
-    magic --> fig5[Figure 5<br/>visualizations]
-    pseudotime --> fig5
-    tradeseq --> fig5
+    magic --> fig3[Figure 3<br/>visualizations]
+    k5_epi --> fig3
+    pseudotime --> fig3
+    velocity --> fig3
+    
+    magic --> fig6[Figure 6<br/>visualizations]
+    pseudotime --> fig6
+    tradeseq --> fig6
     
     %% Style settings
     classDef process fill:#e1f5fe,stroke:#01579b;
@@ -147,7 +147,7 @@ graph TB
     
     class raw_data,k5_data input;
     class qc,integration,harmony,epi_subset,subclustering,magic,slingshot,pseudotime,tradeseq,k5_integration,k5_harmony,k5_epi,velocity process;
-    class fig1,fig2,fig5 output;
+    class fig2,fig3,fig6 output;
 ```
 
 ## Key Shared Resources
@@ -156,8 +156,8 @@ Several key data objects are shared across multiple analyses:
 
 1. **`JE_combined_epi_harmony_20221128.rds`**: Core integrated epithelial dataset used in all figures
 2. **`JE_combined_epi_harmony_MAGIC_renamed.rds`**: MAGIC-imputed data used for trajectory analysis and visualization
-3. **Slingshot objects**: Used for pseudotime analysis in Figures 2 and 5
-4. **K5 lineage data**: Specifically used for Figure 2 to track epithelial lineages
+3. **Slingshot objects**: Used for pseudotime analysis in Figures 3 and 6
+4. **K5 lineage data**: Specifically used for Figure 3 to track epithelial lineages
 
 ## Analysis Tools and Methods
 
@@ -170,8 +170,8 @@ Several key data objects are shared across multiple analyses:
 
 ## Figure-Specific Analyses
 
-1. **Figure 1**: Focus on overall cell type identification and basic characterization
-2. **Figure 2**: Focus on K5 lineage tracing and epithelial cell fate dynamics
-3. **Figure 5**: Focus on gene expression dynamics along developmental trajectories
+1. **Figure 2**: Focus on overall cell type identification and basic characterization
+2. **Figure 3**: Focus on K5 lineage tracing and epithelial cell fate dynamics
+3. **Figure 6**: Focus on gene expression dynamics along developmental trajectories
 
 This document provides a high-level overview of the data flow for scRNA-seq analysis in the JE paper. For detailed methods and parameters, please refer to the individual analysis scripts. 
