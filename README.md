@@ -1,6 +1,9 @@
 # A p63-dependent molecular switch directs epithelial fate to form a specialized seal at the tooth-gingiva interface
 
-This repository contains code and analysis scripts for the paper "A p63-dependent molecular switch directs epithelial fate to form a specialized seal at the tooth-gingiva interface". The code is organized by figure and analysis type.
+This repository contains code and analysis scripts for the paper "A p63-dependent molecular switch directs epithelial fate to form a specialized seal at the tooth-gingiva interface". The code is organized by figure and analysis type, and I put a markdown file detailing the organization and related input/output files for each main figure. 
+
+If you feel my code helpful for your research, please cite:
+Liang, Y., Gao, J., Han, L., Zhou, Y., Li, Q., Pei, F., Chen, Z., Fei, P., Zhang, Y., and Liu, H. (2026). A p63-dependent molecular switch directs epithelial fate to form a specialized seal at the tooth-gingiva interface. Cell Rep. 45, 116981. https://doi.org/10.1016/j.celrep.2026.116981.
 
 ## Repository Structure
 
